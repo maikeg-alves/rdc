@@ -129,13 +129,17 @@ export function finishToolEvent(
         durationMs: Date.now() - context.startedAt,
         ...details,
         origin: args && typeof args === 'object' ? args.origin : undefined,
+        args: redact(args),
         result: {
             isError,
             textPreview: resultPreview(
                 result,
-                tool === 'start_process' || tool === 'read_process_output' || tool === 'interact_with_process' || tool === 'wifi_list_networks' || tool === 'wifi_status'
-                    ? 8000
-                    : 500
+                tool === 'start_process' || tool === 'read_process_output' || tool === 'interact_with_process' ||
+                tool === 'read_file' || tool === 'read_multiple_files' || tool === 'list_directory' ||
+                tool === 'write_file' || tool === 'edit_block' ||
+                tool === 'wifi_list_networks' || tool === 'wifi_status'
+                    ? 4194304
+                    : 8192
             ),
         },
     });

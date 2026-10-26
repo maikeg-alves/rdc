@@ -22,7 +22,7 @@ const rawFile = path.join(logDir, 'tunnel.log');
 const pidFile = path.join(home, '.rdc', 'rdc.pid');
 const healthUrl = process.env.RDC_HEALTH_URL || 'http://127.0.0.1:8080/readyz';
 
-const debug = process.argv.includes('--debug');
+let debug = process.argv.includes('--debug');
 const demo = process.argv.includes('--demo');
 const check = process.argv.includes('--check');
 
@@ -36,24 +36,25 @@ const ansi = {
   yellow: '\x1b[33m',
   red: '\x1b[31m',
   cyan: '\x1b[36m',
+  blue: '\x1b[34m',
   gray: '\x1b[90m',
-  home: '\x1b[H',
-  clearBelow: '\x1b[J',
+  white: '\x1b[97m',
   hide: '\x1b[?25l',
   show: '\x1b[?25h',
   altOn: '\x1b[?1049h',
-  altOff: '\x1b[?1049l'
+  altOff: '\x1b[?1049l',
 };
 
 const tty = Boolean(process.stdout.isTTY);
-const c = (code, text) => tty ? code + text + ansi.reset : text;
-const clip = (s, n) => String(s ?? '').replace(/\s+/g, ' ').trim().slice(0, n);
-const time = (iso) => {
+const color = (code, text) => tty ? code + text + ansi.reset : text;
+const cleanAnsi = text => String(text ?? '').replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, '');
+const time = iso => {
   const d = new Date(iso);
-  return Number.isNaN(d.getTime())
-    ? '--:--:--'
-    : d.toLocaleTimeString('pt-BR', { hour12: false });
+  return Number.isNaN(d.getTime()) ? '--:--:--' : d.toLocaleTimeString('pt-BR', { hour12: false });
 };
+const duration = ms => typeof ms === 'number'
+  ? (ms >= 1000 ? (ms / 1000).toFixed(ms >= 10000 ? 1 : 2) + 's' : ms + 'ms')
+  : '';
 
 function validate() {
   const checks = [
@@ -61,11 +62,9 @@ function validate() {
     ['profile', profileFile, fs.existsSync(profileFile)],
     ['fork build', path.join(root, 'dist', 'index.js'), fs.existsSync(path.join(root, 'dist', 'index.js'))],
   ];
-
   for (const [name, p, ok] of checks) {
     console.log(`${ok ? '✓' : '✗'} ${name}: ${p}`);
   }
-
   process.exit(checks.every(([, , ok]) => ok) ? 0 : 1);
 }
 
@@ -80,20 +79,17 @@ function killProcessTree(pid) {
     });
     return;
   }
-
   try { process.kill(Number(pid), 'SIGTERM'); } catch {}
 }
 
 function stopPreviousInstance() {
   if (!fs.existsSync(pidFile)) return;
-
   try {
     const previousPid = Number(fs.readFileSync(pidFile, 'utf8').trim());
     if (Number.isFinite(previousPid) && previousPid > 0 && previousPid !== process.pid) {
       killProcessTree(previousPid);
     }
   } catch {}
-
   try { fs.unlinkSync(pidFile); } catch {}
 }
 
@@ -102,221 +98,315 @@ if (!demo) {
   fs.writeFileSync(pidFile, String(process.pid), 'utf8');
 }
 
-let events = [];
 let child = null;
 let eventOffset = fs.existsSync(eventFile) ? fs.statSync(eventFile).size : 0;
-let lastRenderKey = '';
-let lastTunnelLine = '';
-let tunnelState = demo ? 'demo' : 'connecting';
+let partialEventLine = '';
+let tunnelState = demo ? 'online' : 'connecting';
 let mcpState = demo ? 'ready' : 'starting';
-let healthDetail = 'aguardando /readyz';
+let healthDetail = demo ? 'readyz HTTP 200 · local' : 'iniciando tunnel-client...';
+let lastTunnelLine = '';
 let shuttingDown = false;
+let headerKey = '';
+let chromeReady = false;
 
-function readEvents() {
-  if (!fs.existsSync(eventFile)) return;
+const HEADER_ROWS = 5;
+const BODY_TOP = HEADER_ROWS + 1;
 
+function terminalRows() {
+  return Math.max(process.stdout.rows || 30, 12);
+}
+
+function terminalCols() {
+  return Math.max(process.stdout.columns || 100, 72);
+}
+
+function bodyBottom() {
+  return Math.max(BODY_TOP, terminalRows() - 2);
+}
+
+function footerRow() {
+  return terminalRows();
+}
+
+function move(row, col = 1) {
+  if (tty) process.stdout.write(`\x1b[${row};${col}H`);
+}
+
+function clearLine() {
+  if (tty) process.stdout.write('\x1b[2K');
+}
+
+function stateBadge(state, kind = 'tunnel') {
+  if (state === 'online' || state === 'ready') return color(ansi.green, '● ONLINE');
+  if (state === 'connecting' || state === 'starting') return color(ansi.yellow, '● CONECTANDO');
+  if (state === 'degraded') return color(ansi.yellow, '● DEGRADADO');
+  return color(ansi.red, kind === 'mcp' ? '● PARADO' : '● OFFLINE');
+}
+
+function setupScreen() {
+  if (!tty) return;
+  process.stdout.write(ansi.altOn + ansi.hide + '\x1b[2J\x1b[H');
+  process.stdout.write(`\x1b[${BODY_TOP};${bodyBottom()}r`);
+  chromeReady = true;
+  drawChrome(true);
+  move(bodyBottom(), 1);
+}
+
+function drawChrome(force = false) {
+  if (!tty) return;
+
+  const key = JSON.stringify([tunnelState, mcpState, healthDetail, debug, terminalCols(), terminalRows()]);
+  if (!force && key === headerKey) return;
+  headerKey = key;
+
+  const cols = terminalCols();
+  const inner = Math.max(20, cols - 2);
+  const topLabel = ' RDC · AGENT CONSOLE ';
+  const top = '╭' + topLabel + '─'.repeat(Math.max(0, inner - topLabel.length)) + '╮';
+  const bottom = '╰' + '─'.repeat(inner) + '╯';
+
+  const currentBottom = bodyBottom();
+  process.stdout.write('\x1b7');
+
+  move(1); clearLine(); process.stdout.write(color(ansi.bold, top));
+  move(2); clearLine();
+  process.stdout.write('│ ' + color(ansi.dim, 'Tunnel') + ' ' + stateBadge(tunnelState) +
+    '   ' + color(ansi.dim, 'MCP') + ' ' + stateBadge(mcpState, 'mcp') +
+    '   ' + color(ansi.dim, 'Mode') + ' ' + color(debug ? ansi.yellow : ansi.cyan, debug ? 'DEBUG' : 'AGENT'));
+  move(3); clearLine();
+  process.stdout.write('│ ' + color(ansi.dim, healthDetail));
+  move(4); clearLine(); process.stdout.write(color(ansi.bold, bottom));
+  move(5); clearLine();
+  process.stdout.write(color(ansi.gray, '   atividade do agente — comandos e resultados aparecem abaixo em tempo real'));
+
+  move(footerRow()); clearLine();
+  process.stdout.write(color(ansi.dim, '  [Q] sair   [D] debug   ·   rdc logs   ·   rdc sessions'));
+
+  process.stdout.write(`\x1b[${BODY_TOP};${currentBottom}r`);
+  process.stdout.write('\x1b8');
+}
+
+function writeBody(text = '') {
+  const normalized = String(text).replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  if (!tty) {
+    process.stdout.write(normalized.endsWith('\n') ? normalized : normalized + '\n');
+    return;
+  }
+
+  move(bodyBottom(), 1);
+  process.stdout.write(normalized);
+  if (!normalized.endsWith('\n')) process.stdout.write('\n');
+}
+
+function headline(icon, event, label, extra = '') {
+  const ts = color(ansi.gray, time(event.timestamp));
+  const tool = color(ansi.cyan, label);
+  const suffix = extra ? color(ansi.dim, ' · ' + extra) : '';
+  return ` ${icon} ${ts}  ${color(ansi.bold, 'AGENT')}  ${tool}${suffix}`;
+}
+
+function printCode(text, prefix = '    ') {
+  const value = cleanAnsi(text).replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  for (const line of value.split('\n')) {
+    writeBody(prefix + line);
+  }
+}
+
+function commandOutput(text) {
+  return cleanAnsi(text)
+    .replace(/^Process started with PID[^\n]*\n?/im, '')
+    .replace(/^Initial output:\s*\n?/im, '')
+    .replace(/^✅ Process[^\n]*$/gim, '')
+    .replace(/^⏳ Process[^\n]*$/gim, '')
+    .replace(/^\[executed on device:[^\n]*$/gim, '')
+    .replace(/^\[Reading [^\n]*\]\s*\n?/im, '')
+    .trimEnd();
+}
+
+function printWifi(event) {
+  const tool = event.tool;
+  let data;
+  try {
+    data = JSON.parse(event.result?.textPreview || '{}');
+  } catch {
+    writeBody(headline(color(ansi.green, '✓'), event, tool, duration(event.durationMs)));
+    printCode(event.result?.textPreview || '', '    ');
+    writeBody('');
+    return;
+  }
+
+  writeBody(headline(color(ansi.green, '✓'), event, tool, duration(event.durationMs)));
+
+  if (tool === 'wifi_list_networks' && Array.isArray(data.networks)) {
+    writeBody('    ' + color(ansi.dim, 'redes próximas') + '  ' + color(ansi.bold, String(data.networkCount ?? data.networks.length)));
+    for (const network of data.networks) {
+      const best = Array.isArray(network.bssids)
+        ? [...network.bssids].sort((a, b) => (b.signal ?? -1) - (a.signal ?? -1))[0]
+        : undefined;
+      const ssid = network.ssid || '<oculta>';
+      const signal = best?.signal !== undefined ? String(best.signal).padStart(3) + '%' : ' --%';
+      const channel = best?.channel !== undefined ? 'ch ' + String(best.channel).padEnd(3) : 'ch -- ';
+      const security = network.authentication || network.encryption || '';
+      writeBody('      ' + color(ansi.cyan, '●') + ' ' + ssid);
+      writeBody('        ' + color(ansi.dim, signal + '  ' + channel + '  ' + security));
+      if (best?.bssid) writeBody('        ' + color(ansi.gray, 'BSSID ' + best.bssid + (best.radioType ? ' · ' + best.radioType : '')));
+    }
+  } else if (tool === 'wifi_status') {
+    if (data.state) writeBody('    ' + color(ansi.dim, 'estado ') + data.state);
+    if (data.ssid) writeBody('    ' + color(ansi.dim, 'ssid   ') + color(ansi.bold, data.ssid));
+    if (data.signal !== undefined) writeBody('    ' + color(ansi.dim, 'sinal  ') + data.signal + '%');
+    if (data.channel !== undefined) writeBody('    ' + color(ansi.dim, 'canal  ') + data.channel);
+    if (data.radioType) writeBody('    ' + color(ansi.dim, 'rádio  ') + data.radioType);
+  }
+
+  writeBody('');
+}
+
+function printStart(event) {
+  if (!debug && event.origin === 'ui') return;
+
+  const args = event.args || {};
+  const icon = color(ansi.yellow, '●');
+
+  if (event.category === 'wifi') {
+    writeBody(headline(icon, event, event.tool));
+    writeBody('    ' + color(ansi.dim, event.tool === 'wifi_status' ? 'consultando interface Wi‑Fi...' : 'procurando redes Wi‑Fi próximas...'));
+    return;
+  }
+
+  if (event.category === 'terminal') {
+    writeBody(headline(icon, event, event.tool));
+    const command = typeof args.command === 'string' ? args.command : event.target || '';
+    if (command) {
+      writeBody('    ' + color(ansi.green, '❯') + ' ' + color(ansi.white, command));
+    }
+    return;
+  }
+
+  if (event.category === 'ssh') {
+    writeBody(headline(icon, event, event.tool));
+    const target = event.ssh?.rawTarget || event.target || '';
+    if (target) writeBody('    ' + color(ansi.green, '❯') + ' ssh ' + target);
+    return;
+  }
+
+  if (event.category === 'file') {
+    writeBody(headline(icon, event, event.tool));
+    const target = event.target || args.path || args.file_path || args.source || '';
+    if (target) writeBody('    ' + color(ansi.dim, 'arquivo ') + target);
+
+    if (event.tool === 'write_file' && typeof args.content === 'string') {
+      writeBody('    ' + color(ansi.dim, 'conteúdo'));
+      printCode(args.content, '      ');
+    } else if (event.tool === 'edit_block') {
+      if (typeof args.old_string === 'string') {
+        writeBody('    ' + color(ansi.red, '− anterior'));
+        printCode(args.old_string, '      ');
+      }
+      if (typeof args.new_string === 'string') {
+        writeBody('    ' + color(ansi.green, '+ novo'));
+        printCode(args.new_string, '      ');
+      }
+    }
+    return;
+  }
+
+  writeBody(headline(icon, event, event.tool));
+  const keys = Object.keys(args).filter(key => key !== 'origin');
+  if (keys.length) printCode(JSON.stringify(args, null, 2), '    ');
+}
+
+function printFinish(event) {
+  if (!debug && event.origin === 'ui') return;
+
+  if (event.category === 'wifi' && event.status === 'success') {
+    printWifi(event);
+    return;
+  }
+
+  const ok = event.status === 'success';
+  const icon = color(ok ? ansi.green : ansi.red, ok ? '✓' : '✗');
+  const label = ok ? 'concluído' : 'falhou';
+  writeBody('    ' + icon + ' ' + color(ok ? ansi.green : ansi.red, label) +
+    (event.durationMs !== undefined ? color(ansi.dim, ' · ' + duration(event.durationMs)) : ''));
+
+  const text = event.result?.textPreview || '';
+
+  if (!ok) {
+    if (text) printCode(text, '      ');
+    writeBody('');
+    return;
+  }
+
+  if (event.category === 'terminal' || event.category === 'ssh') {
+    const output = commandOutput(text);
+    if (output) {
+      writeBody('    ' + color(ansi.dim, 'saída'));
+      printCode(output, '      ');
+    }
+    writeBody('');
+    return;
+  }
+
+  if (event.category === 'file') {
+    if (['read_file', 'read_multiple_files', 'list_directory', 'get_file_info'].includes(event.tool)) {
+      const output = commandOutput(text);
+      if (output) {
+        writeBody('    ' + color(ansi.dim, 'resultado'));
+        printCode(output, '      ');
+      }
+    }
+    writeBody('');
+    return;
+  }
+
+  if (text && debug) {
+    writeBody('    ' + color(ansi.dim, 'resultado'));
+    printCode(text, '      ');
+  }
+  writeBody('');
+}
+
+function readNewEvents() {
+  if (!fs.existsSync(eventFile)) return [];
   const stat = fs.statSync(eventFile);
-  if (stat.size < eventOffset) eventOffset = 0;
-  if (stat.size === eventOffset) return;
+  if (stat.size < eventOffset) {
+    eventOffset = 0;
+    partialEventLine = '';
+  }
+  if (stat.size === eventOffset) return [];
 
   const fd = fs.openSync(eventFile, 'r');
   const size = stat.size - eventOffset;
   const buf = Buffer.alloc(size);
   fs.readSync(fd, buf, 0, size, eventOffset);
   fs.closeSync(fd);
-
   eventOffset = stat.size;
 
-  for (const line of buf.toString('utf8').split(/\r?\n/)) {
+  const combined = partialEventLine + buf.toString('utf8');
+  const lines = combined.split(/\r?\n/);
+  partialEventLine = lines.pop() || '';
+
+  const parsed = [];
+  for (const line of lines) {
     if (!line.trim()) continue;
-    try {
-      events.push(JSON.parse(line));
-      if (events.length > 300) events = events.slice(-300);
-    } catch {}
+    try { parsed.push(JSON.parse(line)); } catch {}
   }
+  return parsed;
 }
 
-function pairedEvents() {
-  const byId = new Map();
-  for (const event of events) byId.set(event.id, event);
-  return [...byId.values()].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-}
-
-function eventLabel(e) {
-  const category = (e.category || 'other').toUpperCase();
-
-  if (e.category === 'ssh') {
-    return [category, e.ssh?.rawTarget || e.target || 'SSH'];
-  }
-
-  if (e.category === 'file') {
-    return [category, e.target || e.action || e.tool];
-  }
-
-  if (e.category === 'terminal') {
-    let target = e.target || e.action || e.tool;
-
-    // Hide noisy host wrapper details from the normal view.
-    if (!debug && /-EncodedCommand\s+/i.test(target)) {
-      target = e.action || e.tool;
-    }
-
-    return [category, target];
-  }
-
-  return [category, e.action || e.tool];
-}
-
-function statusIcon(e) {
-  if (e.status === 'success') return c(ansi.green, '✓');
-  if (e.status === 'error') return c(ansi.red, '✗');
-  return c(ansi.yellow, '●');
-}
-
-function stateBadge(state, kind = 'tunnel') {
-  if (state === 'online' || state === 'ready') return c(ansi.green, '● ONLINE');
-  if (state === 'connecting' || state === 'starting') return c(ansi.yellow, '● CONECTANDO');
-  if (state === 'demo') return c(ansi.cyan, '● DEMO');
-  if (state === 'degraded') return c(ansi.yellow, '● DEGRADADO');
-  return c(ansi.red, kind === 'mcp' ? '● PARADO' : '● OFFLINE');
-}
-
-function render(force = false) {
-  readEvents();
-
-  const width = Math.max(76, Math.min(process.stdout.columns || 100, 120));
-  const line = '─'.repeat(width - 2);
-  const list = pairedEvents()
-    .filter(e => debug || e.origin !== 'ui')
-    .slice(-10);
-
-  const renderKey = JSON.stringify([
-    tunnelState,
-    mcpState,
-    healthDetail,
-    list.map(e => [e.id, e.status, e.durationMs, e.target, e.sessionId]),
-    debug ? lastTunnelLine : ''
-  ]);
-
-  if (!force && renderKey === lastRenderKey) return;
-  lastRenderKey = renderKey;
-
-  let out = '';
-
-  out += c(ansi.bold, '╭─ RDC · NULL ') + line.slice(0, Math.max(0, width - 15)) + '╮\n';
-  out += `│ Tunnel  ${stateBadge(tunnelState)}   MCP  ${stateBadge(mcpState, 'mcp')}\n`;
-  out += `│ ${c(ansi.dim, healthDetail)}\n`;
-  out += '╰' + line + '╯\n\n';
-
-  out += c(ansi.bold, ' Agente') + '\n\n';
-
-  if (!list.length) {
-    out += c(ansi.dim, '  aguardando ações do ChatGPT...') + '\n';
-  } else {
-    for (const e of list) {
-      const duration = typeof e.durationMs === 'number' ? ` · ${e.durationMs}ms` : '';
-      const toolName = e.tool || e.action || 'tool';
-
-      out += ` ${statusIcon(e)} ${c(ansi.gray, time(e.timestamp))}  ${c(ansi.bold, 'AGENT')}  ${c(ansi.cyan, toolName)}${c(ansi.dim, duration)}\n`;
-
-      if (e.category === 'terminal') {
-        let command = e.target || '';
-        if (!debug && /-EncodedCommand\s+/i.test(command)) command = e.action || e.tool;
-        if (command) out += `    ${c(ansi.dim, 'comando')}  ${clip(command, width - 15)}\n`;
-      } else if (e.category === 'file') {
-        if (e.target) out += `    ${c(ansi.dim, 'arquivo')}  ${clip(e.target, width - 15)}\n`;
-      } else if (e.category === 'ssh' && e.ssh?.host) {
-        const port = e.ssh.port ? `:${e.ssh.port}` : '';
-        out += `    ${c(ansi.dim, 'ssh')}      ${e.ssh.user ? e.ssh.user + '@' : ''}${e.ssh.host}${port}\n`;
-      } else if (e.category === 'wifi' && e.status === 'success' && e.result?.textPreview) {
-        try {
-          const data = JSON.parse(e.result.textPreview);
-
-          if (toolName === 'wifi_list_networks' && Array.isArray(data.networks)) {
-            out += `    ${c(ansi.dim, 'redes')}    ${data.networkCount ?? data.networks.length} encontradas\n`;
-
-            for (const network of data.networks.slice(0, 10)) {
-              const best = Array.isArray(network.bssids)
-                ? [...network.bssids].sort((a, b) => (b.signal ?? -1) - (a.signal ?? -1))[0]
-                : undefined;
-              const signal = best?.signal !== undefined ? `${best.signal}%` : '--';
-              const channel = best?.channel !== undefined ? `ch ${best.channel}` : 'ch --';
-              const security = network.authentication || network.encryption || '';
-              out += `      ├─ ${clip(network.ssid || '<oculta>', Math.max(12, width - 42)).padEnd(24)} ${String(signal).padStart(4)}  ${channel.padEnd(7)} ${clip(security, 24)}\n`;
-            }
-
-            if (data.networks.length > 10) {
-              out += `      └─ ${c(ansi.dim, `… +${data.networks.length - 10} redes`)}\n`;
-            }
-          } else if (toolName === 'wifi_status') {
-            out += `    ${c(ansi.dim, 'estado')}   ${data.state || 'desconhecido'}\n`;
-            if (data.ssid) out += `    ${c(ansi.dim, 'ssid')}     ${data.ssid}\n`;
-            if (data.signal !== undefined) out += `    ${c(ansi.dim, 'sinal')}    ${data.signal}%\n`;
-            if (data.channel !== undefined) out += `    ${c(ansi.dim, 'canal')}    ${data.channel}\n`;
-          }
-        } catch {
-          out += `    ${c(ansi.dim, 'wifi')}     ${clip(e.result.textPreview, width - 15)}\n`;
-        }
-      } else {
-        const [, label] = eventLabel(e);
-        if (label && label !== toolName) out += `    ${c(ansi.dim, 'alvo')}     ${clip(label, width - 15)}\n`;
-      }
-
-      if (e.category === 'terminal' && e.status === 'success' && e.result?.textPreview) {
-        const outputLines = String(e.result.textPreview)
-          .replace(/\u001b\[[0-9;?]*[ -\/]*[@-~]/g, '')
-          .split(/\r?\n/)
-          .map(line => line.trimEnd())
-          .filter(line =>
-            line &&
-            !/^Process started with PID\b/i.test(line) &&
-            !/^Initial output:/i.test(line) &&
-            !/^✅ Process\b/i.test(line) &&
-            !/^⏳ Process\b/i.test(line)
-          )
-          .slice(0, 12);
-
-        if (outputLines.length) out += `    ${c(ansi.dim, 'saída')}\n`;
-
-        for (let i = 0; i < outputLines.length; i++) {
-          const branch = i === outputLines.length - 1 ? '└─' : '├─';
-          out += `      ${branch} ${clip(outputLines[i], width - 10)}\n`;
-        }
-
-        if (String(e.result.textPreview).split(/\r?\n/).length > outputLines.length + 3) {
-          out += `      └─ ${c(ansi.dim, '… saída truncada; use rdc logs para ver mais')}\n`;
-        }
-      }
-
-      if (e.status === 'error' && e.result?.textPreview) {
-        out += `    ${c(ansi.red, 'erro')}    ${clip(e.result.textPreview, width - 15)}\n`;
-      }
-
-      out += '\n';
-    }
-  }
-
-  out += '\n' + c(ansi.gray, line) + '\n';
-  out += ` ${c(ansi.dim, 'Q/Ctrl+C sair  ·  rdc logs  ·  rdc sessions')}\n`;
-
-  if (debug && lastTunnelLine) {
-    out += ` ${c(ansi.dim, 'tunnel:')} ${clip(lastTunnelLine, width - 12)}\n`;
-  }
-
-  if (tty) {
-    process.stdout.write(ansi.home + ansi.clearBelow + out);
-  } else {
-    // Non-interactive hosts cannot redraw. Print only when something changed.
-    process.stdout.write(out);
+function pollEvents() {
+  for (const event of readNewEvents()) {
+    if (event.status === 'started') printStart(event);
+    else printFinish(event);
   }
 }
 
 function checkHealth() {
   if (demo || shuttingDown) return;
 
-  const req = http.get(healthUrl, { timeout: 800 }, (res) => {
+  const req = http.get(healthUrl, { timeout: 800 }, res => {
     let body = '';
-
     res.setEncoding('utf8');
     res.on('data', chunk => body += chunk);
     res.on('end', () => {
@@ -325,10 +415,9 @@ function checkHealth() {
         healthDetail = `readyz HTTP ${res.statusCode} · ${healthUrl}`;
       } else {
         tunnelState = 'degraded';
-        healthDetail = `readyz HTTP ${res.statusCode ?? '?'} · ${clip(body, 70)}`;
+        healthDetail = `readyz HTTP ${res.statusCode ?? '?'} · ${cleanAnsi(body).trim()}`;
       }
-
-      render();
+      drawChrome();
     });
   });
 
@@ -336,89 +425,20 @@ function checkHealth() {
   req.on('error', () => {
     if (child && child.exitCode === null) {
       tunnelState = 'connecting';
-      healthDetail = 'tunnel iniciado, aguardando readiness...';
+      healthDetail = 'tunnel iniciado; aguardando readiness...';
     } else {
       tunnelState = 'offline';
       healthDetail = 'processo do tunnel não está ativo';
     }
-
-    render();
+    drawChrome();
   });
-}
-
-function seedDemo() {
-  const now = Date.now();
-
-  tunnelState = 'online';
-  mcpState = 'ready';
-  healthDetail = 'readyz HTTP 200 · http://127.0.0.1:8080/readyz';
-
-  events = [
-    {
-      id: '1',
-      timestamp: new Date(now - 5000).toISOString(),
-      tool: 'read_file',
-      status: 'success',
-      durationMs: 42,
-      category: 'file',
-      target: 'C:\\Projetos\\api\\Program.cs'
-    },
-    {
-      id: '2',
-      timestamp: new Date(now - 3200).toISOString(),
-      tool: 'start_process',
-      status: 'success',
-      durationMs: 311,
-      category: 'terminal',
-      target: 'dotnet build'
-    },
-    {
-      id: '3',
-      timestamp: new Date(now - 2200).toISOString(),
-      tool: 'start_process',
-      status: 'success',
-      durationMs: 487,
-      category: 'ssh',
-      target: 'root@10.0.0.15',
-      ssh: {
-        user: 'root',
-        host: '10.0.0.15',
-        port: 22,
-        rawTarget: 'root@10.0.0.15'
-      }
-    },
-    {
-      id: '4',
-      timestamp: new Date(now - 900).toISOString(),
-      tool: 'wifi_list_networks',
-      status: 'success',
-      durationMs: 641,
-      category: 'wifi',
-      result: {
-        isError: false,
-        textPreview: JSON.stringify({
-          interfaceType: 'Wi-Fi',
-          networkCount: 2,
-          networks: [
-            { ssid: 'ViaFiber-5G', authentication: 'WPA2-Personal', bssids: [{ bssid: 'aa:bb:cc:dd:ee:ff', signal: 82, channel: 44, radioType: '802.11ax' }] },
-            { ssid: 'Guest', authentication: 'Open', bssids: [{ bssid: '11:22:33:44:55:66', signal: 51, channel: 6, radioType: '802.11n' }] }
-          ]
-        })
-      }
-    }
-  ];
-
-  render(true);
-  cleanup(0);
 }
 
 function cleanup(code = 0) {
   if (shuttingDown) return;
   shuttingDown = true;
 
-  if (child?.pid) {
-    killProcessTree(child.pid);
-  }
+  if (child?.pid) killProcessTree(child.pid);
 
   try {
     if (fs.existsSync(pidFile) && Number(fs.readFileSync(pidFile, 'utf8').trim()) === process.pid) {
@@ -427,96 +447,141 @@ function cleanup(code = 0) {
   } catch {}
 
   if (tty) {
-    process.stdout.write(ansi.show + ansi.altOff);
+    process.stdout.write('\x1b[r' + ansi.show + ansi.altOff);
   }
-
   process.exit(code);
 }
 
+function runDemo() {
+  if (tty) setupScreen();
+
+  printStart({
+    id: '1',
+    timestamp: new Date().toISOString(),
+    tool: 'start_process',
+    status: 'started',
+    category: 'terminal',
+    args: { command: 'Get-ChildItem C:\\Users\\maico\\Documents\\Projects' },
+  });
+  printFinish({
+    id: '1',
+    timestamp: new Date().toISOString(),
+    tool: 'start_process',
+    status: 'success',
+    category: 'terminal',
+    durationMs: 734,
+    result: { textPreview: 'MobileFiberOps\ntrackingViaFiber\napp-isp\napi-hub\nn8n\npainel-isp' },
+  });
+  printWifi({
+    id: '2',
+    timestamp: new Date().toISOString(),
+    tool: 'wifi_list_networks',
+    status: 'success',
+    category: 'wifi',
+    durationMs: 412,
+    result: {
+      textPreview: JSON.stringify({
+        networkCount: 2,
+        networks: [
+          { ssid: 'ViaFiber-5G', authentication: 'WPA2-Personal', bssids: [{ signal: 92, channel: 44, bssid: 'AA:BB:CC:DD:EE:FF', radioType: '802.11ax' }] },
+          { ssid: 'Guest', authentication: 'Open', bssids: [{ signal: 51, channel: 6, bssid: '11:22:33:44:55:66', radioType: '802.11n' }] },
+        ],
+      }),
+    },
+  });
+
+  if (!tty) process.exit(0);
+}
+
 if (demo) {
-  if (tty) process.stdout.write(ansi.altOn + ansi.hide);
-  seedDemo();
-}
-
-if (!process.env.CONTROL_PLANE_API_KEY) {
-  console.error('RDC sem autenticação. Use: rdc login');
-  process.exit(2);
-}
-
-const raw = fs.createWriteStream(rawFile, { flags: 'a' });
-
-child = spawn(tunnelExe, ['run', '--profile-file', profileFile], {
-  env: process.env,
-  windowsHide: true,
-  stdio: ['ignore', 'pipe', 'pipe']
-});
-
-tunnelState = 'connecting';
-mcpState = 'starting';
-healthDetail = 'iniciando tunnel-client...';
-
-for (const stream of [child.stdout, child.stderr]) {
-  stream.setEncoding('utf8');
-
-  stream.on('data', chunk => {
-    raw.write(chunk);
-
-    const lines = chunk.split(/\r?\n/).filter(Boolean);
-
-    for (const line of lines) {
-      lastTunnelLine = line;
-
-      if (/stdio MCP command started/i.test(line)) {
-        mcpState = 'ready';
-      }
-
-      if (/stdio MCP command exited|stdio MCP command failed/i.test(line)) {
-        mcpState = 'stopped';
-      }
-
-      if (/tunnel-client started/i.test(line)) {
-        healthDetail = 'control plane conectado; validando readiness...';
-      }
-    }
-
-    render();
-  });
-}
-
-child.on('exit', code => {
-  tunnelState = 'offline';
-  mcpState = 'stopped';
-  healthDetail = `tunnel-client finalizado (exit ${code ?? '?'})`;
-  render(true);
-
-  if (!tty) {
-    setTimeout(() => cleanup(code ?? 1), 200);
+  runDemo();
+  if (tty) {
+    process.stdin.setRawMode?.(true);
+    process.stdin.resume();
+    process.stdin.setEncoding('utf8');
+    process.stdin.on('data', key => {
+      if (key === '\u0003' || key.toLowerCase() === 'q') cleanup(0);
+    });
   }
-});
+} else {
+  if (!process.env.CONTROL_PLANE_API_KEY) {
+    console.error('RDC sem autenticação. Use: rdc login');
+    process.exit(2);
+  }
 
-if (tty) {
-  process.stdout.write(ansi.altOn + ansi.hide);
-  process.stdin.setRawMode?.(true);
-  process.stdin.resume();
-  process.stdin.setEncoding('utf8');
+  if (tty) setupScreen();
 
-  process.stdin.on('data', key => {
-    if (key === '\u0003' || key.toLowerCase() === 'q') cleanup(0);
+  const raw = fs.createWriteStream(rawFile, { flags: 'a' });
+
+  child = spawn(tunnelExe, ['run', '--profile-file', profileFile], {
+    env: process.env,
+    windowsHide: true,
+    stdio: ['ignore', 'pipe', 'pipe'],
   });
 
-  process.stdout.on('resize', () => render(true));
+  tunnelState = 'connecting';
+  mcpState = 'starting';
+  healthDetail = 'iniciando tunnel-client...';
+  drawChrome(true);
+
+  for (const stream of [child.stdout, child.stderr]) {
+    stream.setEncoding('utf8');
+    stream.on('data', chunk => {
+      raw.write(chunk);
+      for (const line of chunk.split(/\r?\n/).filter(Boolean)) {
+        lastTunnelLine = line;
+        if (/stdio MCP command started/i.test(line)) mcpState = 'ready';
+        if (/stdio MCP command exited|stdio MCP command failed/i.test(line)) mcpState = 'stopped';
+        if (/tunnel-client started/i.test(line)) {
+          healthDetail = 'control plane conectado; validando readiness...';
+        }
+      }
+      drawChrome();
+      if (debug && lastTunnelLine) {
+        writeBody(color(ansi.gray, '    [tunnel] ' + cleanAnsi(lastTunnelLine)));
+      }
+    });
+  }
+
+  child.on('exit', code => {
+    tunnelState = 'offline';
+    mcpState = 'stopped';
+    healthDetail = `tunnel-client finalizado (exit ${code ?? '?'})`;
+    drawChrome(true);
+    writeBody(color(ansi.red, ' ✗ tunnel finalizado'));
+    if (!tty) setTimeout(() => cleanup(code ?? 1), 200);
+  });
+
+  if (tty) {
+    process.stdin.setRawMode?.(true);
+    process.stdin.resume();
+    process.stdin.setEncoding('utf8');
+    process.stdin.on('data', key => {
+      if (key === '\u0003' || key.toLowerCase() === 'q') cleanup(0);
+      if (key.toLowerCase() === 'd') {
+        debug = !debug;
+        drawChrome(true);
+        writeBody(color(ansi.gray, ` debug ${debug ? 'ativado' : 'desativado'}`));
+      }
+    });
+
+    process.stdout.on('resize', () => {
+      process.stdout.write('\x1b[r');
+      process.stdout.write(`\x1b[${BODY_TOP};${bodyBottom()}r`);
+      drawChrome(true);
+      move(bodyBottom(), 1);
+    });
+  }
+
+  checkHealth();
+  const healthTimer = setInterval(checkHealth, 1000);
+  const eventTimer = setInterval(pollEvents, 120);
+
+  process.on('SIGINT', () => cleanup(0));
+  process.on('SIGTERM', () => cleanup(0));
+  process.on('exit', () => {
+    clearInterval(healthTimer);
+    clearInterval(eventTimer);
+    try { raw.end(); } catch {}
+  });
 }
-
-render(true);
-checkHealth();
-
-const healthTimer = setInterval(checkHealth, 1000);
-const eventTimer = setInterval(() => render(), 350);
-
-process.on('SIGINT', () => cleanup(0));
-process.on('SIGTERM', () => cleanup(0));
-process.on('exit', () => {
-  clearInterval(healthTimer);
-  clearInterval(eventTimer);
-  try { raw.end(); } catch {}
-});
