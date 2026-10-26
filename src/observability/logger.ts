@@ -59,10 +59,10 @@ function classify(tool: string, args: any): EventDetails {
     return { category: 'other', action: tool, pid };
 }
 
-function resultPreview(result: any): string | undefined {
+function resultPreview(result: any, maxLength = 500): string | undefined {
     const firstText = result?.content?.find?.((item: any) => item?.type === 'text' && typeof item?.text === 'string')?.text;
     if (!firstText) return undefined;
-    return firstText.replace(/\u001b\[[0-9;]*m/g, '').slice(0, 500);
+    return firstText.replace(/\u001b\[[0-9;?]*[ -\/]*[@-~]/g, '').slice(0, maxLength);
 }
 
 async function append(event: RdcEvent): Promise<void> {
@@ -127,7 +127,12 @@ export function finishToolEvent(
         origin: args && typeof args === 'object' ? args.origin : undefined,
         result: {
             isError,
-            textPreview: resultPreview(result),
+            textPreview: resultPreview(
+                result,
+                tool === 'start_process' || tool === 'read_process_output' || tool === 'interact_with_process'
+                    ? 8000
+                    : 500
+            ),
         },
     });
 

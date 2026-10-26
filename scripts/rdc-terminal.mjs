@@ -192,6 +192,30 @@ function render(force = false) {
         out += `    └─ ${c(ansi.dim, `${e.ssh.user ? e.ssh.user + '@' : ''}${e.ssh.host}${port}`)}\n`;
       }
 
+      if (e.category === 'terminal' && e.status === 'success' && e.result?.textPreview) {
+        const outputLines = String(e.result.textPreview)
+          .replace(/\u001b\[[0-9;?]*[ -\/]*[@-~]/g, '')
+          .split(/\r?\n/)
+          .map(line => line.trimEnd())
+          .filter(line =>
+            line &&
+            !/^Process started with PID\b/i.test(line) &&
+            !/^Initial output:/i.test(line) &&
+            !/^✅ Process\b/i.test(line) &&
+            !/^⏳ Process\b/i.test(line)
+          )
+          .slice(0, 12);
+
+        for (let i = 0; i < outputLines.length; i++) {
+          const branch = i === outputLines.length - 1 ? '└─' : '├─';
+          out += `    ${branch} ${clip(outputLines[i], width - 8)}\n`;
+        }
+
+        if (String(e.result.textPreview).split(/\r?\n/).length > outputLines.length + 3) {
+          out += `    └─ ${c(ansi.dim, '… saída truncada; use rdc logs para ver mais')}\n`;
+        }
+      }
+
       if (e.status === 'error' && e.result?.textPreview) {
         out += `    └─ ${c(ansi.red, clip(e.result.textPreview, width - 8))}\n`;
       }
