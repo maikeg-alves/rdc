@@ -20,6 +20,10 @@ function numericPid(args: any): number | undefined {
 function classify(tool: string, args: any): EventDetails {
     const pid = numericPid(args);
 
+    if (tool === 'wifi_list_networks' || tool === 'wifi_status') {
+        return { category: 'wifi', action: tool };
+    }
+
     if (pid !== undefined) {
         const session = getSshSession(pid);
         if (session) {
@@ -129,7 +133,7 @@ export function finishToolEvent(
             isError,
             textPreview: resultPreview(
                 result,
-                tool === 'start_process' || tool === 'read_process_output' || tool === 'interact_with_process'
+                tool === 'start_process' || tool === 'read_process_output' || tool === 'interact_with_process' || tool === 'wifi_list_networks' || tool === 'wifi_status'
                     ? 8000
                     : 500
             ),

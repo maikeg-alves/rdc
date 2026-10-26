@@ -23,6 +23,15 @@ export const SetConfigValueArgsSchema = z.object({
 // Empty schemas
 export const ListProcessesArgsSchema = z.object({});
 
+// Wi-Fi read-only tools
+export const WifiListNetworksArgsSchema = z.object({
+  origin: z.enum(['ui', 'llm']).optional(),
+});
+
+export const WifiStatusArgsSchema = z.object({
+  origin: z.enum(['ui', 'llm']).optional(),
+});
+
 // Terminal tools schemas
 export const StartProcessArgsSchema = z.object({
   command: z.string(),
@@ -251,6 +260,8 @@ export const TrackUiEventArgsSchema = z.object({
 export const toolArgSchemas: Record<string, z.ZodTypeAny> = {
   get_config: GetConfigArgsSchema,
   set_config_value: SetConfigValueArgsSchema,
+  wifi_list_networks: WifiListNetworksArgsSchema,
+  wifi_status: WifiStatusArgsSchema,
   read_file: ReadFileArgsSchema,
   read_multiple_files: ReadMultipleFilesArgsSchema,
   write_file: WriteFileArgsSchema,

@@ -196,6 +196,35 @@ function render(force = false) {
       } else if (e.category === 'ssh' && e.ssh?.host) {
         const port = e.ssh.port ? `:${e.ssh.port}` : '';
         out += `    ${c(ansi.dim, 'ssh')}      ${e.ssh.user ? e.ssh.user + '@' : ''}${e.ssh.host}${port}\n`;
+      } else if (e.category === 'wifi' && e.status === 'success' && e.result?.textPreview) {
+        try {
+          const data = JSON.parse(e.result.textPreview);
+
+          if (toolName === 'wifi_list_networks' && Array.isArray(data.networks)) {
+            out += `    ${c(ansi.dim, 'redes')}    ${data.networkCount ?? data.networks.length} encontradas\n`;
+
+            for (const network of data.networks.slice(0, 10)) {
+              const best = Array.isArray(network.bssids)
+                ? [...network.bssids].sort((a, b) => (b.signal ?? -1) - (a.signal ?? -1))[0]
+                : undefined;
+              const signal = best?.signal !== undefined ? `${best.signal}%` : '--';
+              const channel = best?.channel !== undefined ? `ch ${best.channel}` : 'ch --';
+              const security = network.authentication || network.encryption || '';
+              out += `      ├─ ${clip(network.ssid || '<oculta>', Math.max(12, width - 42)).padEnd(24)} ${String(signal).padStart(4)}  ${channel.padEnd(7)} ${clip(security, 24)}\n`;
+            }
+
+            if (data.networks.length > 10) {
+              out += `      └─ ${c(ansi.dim, `… +${data.networks.length - 10} redes`)}\n`;
+            }
+          } else if (toolName === 'wifi_status') {
+            out += `    ${c(ansi.dim, 'estado')}   ${data.state || 'desconhecido'}\n`;
+            if (data.ssid) out += `    ${c(ansi.dim, 'ssid')}     ${data.ssid}\n`;
+            if (data.signal !== undefined) out += `    ${c(ansi.dim, 'sinal')}    ${data.signal}%\n`;
+            if (data.channel !== undefined) out += `    ${c(ansi.dim, 'canal')}    ${data.channel}\n`;
+          }
+        } catch {
+          out += `    ${c(ansi.dim, 'wifi')}     ${clip(e.result.textPreview, width - 15)}\n`;
+        }
       } else {
         const [, label] = eventLabel(e);
         if (label && label !== toolName) out += `    ${c(ansi.dim, 'alvo')}     ${clip(label, width - 15)}\n`;
@@ -313,7 +342,7 @@ function seedDemo() {
     },
     {
       id: '3',
-      timestamp: new Date(now - 1200).toISOString(),
+      timestamp: new Date(now - 2200).toISOString(),
       tool: 'start_process',
       status: 'success',
       durationMs: 487,
@@ -324,6 +353,25 @@ function seedDemo() {
         host: '10.0.0.15',
         port: 22,
         rawTarget: 'root@10.0.0.15'
+      }
+    },
+    {
+      id: '4',
+      timestamp: new Date(now - 900).toISOString(),
+      tool: 'wifi_list_networks',
+      status: 'success',
+      durationMs: 641,
+      category: 'wifi',
+      result: {
+        isError: false,
+        textPreview: JSON.stringify({
+          interfaceType: 'Wi-Fi',
+          networkCount: 2,
+          networks: [
+            { ssid: 'ViaFiber-5G', authentication: 'WPA2-Personal', bssids: [{ bssid: 'aa:bb:cc:dd:ee:ff', signal: 82, channel: 44, radioType: '802.11ax' }] },
+            { ssid: 'Guest', authentication: 'Open', bssids: [{ bssid: '11:22:33:44:55:66', signal: 51, channel: 6, radioType: '802.11n' }] }
+          ]
+        })
       }
     }
   ];

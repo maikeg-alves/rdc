@@ -47,6 +47,8 @@ import {
     GetFileInfoArgsSchema,
     GetConfigArgsSchema,
     SetConfigValueArgsSchema,
+    WifiListNetworksArgsSchema,
+    WifiStatusArgsSchema,
     ListProcessesArgsSchema,
     EditBlockArgsSchema,
     GetUsageStatsArgsSchema,
@@ -65,6 +67,7 @@ import {
     buildUnsupportedParamsWarning,
 } from './utils/unsupportedParams.js';
 import { getConfig, setConfigValue } from './tools/config.js';
+import { listWifiNetworks, getWifiStatus } from './tools/wifi.js';
 import { getUsageStats } from './tools/usage.js';
 import { giveFeedbackToDesktopCommander } from './tools/feedback.js';
 import { trackToolCall } from './utils/trackTools.js';
@@ -361,6 +364,38 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
                     title: "Set Configuration Value",
                     readOnlyHint: false,
                     destructiveHint: true,
+                    openWorldHint: false,
+                },
+            },
+
+            // Wi-Fi tools (read-only)
+            {
+                name: "wifi_list_networks",
+                description: `
+                        Scan nearby Wi-Fi networks on Windows using the local WLAN API via netsh.
+                        Returns structured SSID, BSSID, signal, channel, radio type, authentication, and encryption data.
+                        This tool is read-only and does not expose saved Wi-Fi passwords or credentials.
+                        ${CMD_PREFIX_DESCRIPTION}`,
+                inputSchema: zodToJsonSchema(WifiListNetworksArgsSchema),
+                annotations: {
+                    title: "List Wi-Fi Networks",
+                    readOnlyHint: true,
+                    destructiveHint: false,
+                    openWorldHint: false,
+                },
+            },
+            {
+                name: "wifi_status",
+                description: `
+                        Read the current Windows Wi-Fi interface status.
+                        Returns connection state, SSID, BSSID, signal, channel, radio type, and link rates when available.
+                        This tool is read-only and does not expose saved Wi-Fi passwords or credentials.
+                        ${CMD_PREFIX_DESCRIPTION}`,
+                inputSchema: zodToJsonSchema(WifiStatusArgsSchema),
+                annotations: {
+                    title: "Wi-Fi Status",
+                    readOnlyHint: true,
+                    destructiveHint: false,
                     openWorldHint: false,
                 },
             },
@@ -1278,6 +1313,14 @@ async function handleCallToolRequest(request: CallToolRequest): Promise<ServerRe
                         isError: true,
                     };
                 }
+                break;
+
+            case "wifi_list_networks":
+                result = await listWifiNetworks();
+                break;
+
+            case "wifi_status":
+                result = await getWifiStatus();
                 break;
 
             case "get_usage_stats":
