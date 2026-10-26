@@ -3,7 +3,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import http from 'http';
-import { spawn } from 'child_process';
+import { spawn, spawnSync } from 'child_process';
 import { fileURLToPath } from 'url';
 
 const home = os.homedir();
@@ -19,6 +19,7 @@ const profileFile = process.env.RDC_PROFILE_FILE || path.join(
 const logDir = process.env.RDC_LOG_DIR || path.join(home, '.rdc', 'logs');
 const eventFile = path.join(logDir, 'events.jsonl');
 const rawFile = path.join(logDir, 'tunnel.log');
+const pidFile = path.join(home, '.rdc', 'rdc.pid');
 const healthUrl = process.env.RDC_HEALTH_URL || 'http://127.0.0.1:8080/readyz';
 
 const debug = process.argv.includes('--debug');
@@ -70,9 +71,40 @@ function validate() {
 
 if (check) validate();
 
+function killProcessTree(pid) {
+  if (!pid || !Number.isFinite(Number(pid))) return;
+  if (process.platform === 'win32') {
+    spawnSync('taskkill.exe', ['/PID', String(pid), '/T', '/F'], {
+      windowsHide: true,
+      stdio: 'ignore',
+    });
+    return;
+  }
+
+  try { process.kill(Number(pid), 'SIGTERM'); } catch {}
+}
+
+function stopPreviousInstance() {
+  if (!fs.existsSync(pidFile)) return;
+
+  try {
+    const previousPid = Number(fs.readFileSync(pidFile, 'utf8').trim());
+    if (Number.isFinite(previousPid) && previousPid > 0 && previousPid !== process.pid) {
+      killProcessTree(previousPid);
+    }
+  } catch {}
+
+  try { fs.unlinkSync(pidFile); } catch {}
+}
+
+if (!demo) {
+  stopPreviousInstance();
+  fs.writeFileSync(pidFile, String(process.pid), 'utf8');
+}
+
 let events = [];
 let child = null;
-let eventOffset = 0;
+let eventOffset = fs.existsSync(eventFile) ? fs.statSync(eventFile).size : 0;
 let lastRenderKey = '';
 let lastTunnelLine = '';
 let tunnelState = demo ? 'demo' : 'connecting';
@@ -384,9 +416,15 @@ function cleanup(code = 0) {
   if (shuttingDown) return;
   shuttingDown = true;
 
-  if (child && !child.killed && child.exitCode === null) {
-    child.kill();
+  if (child?.pid) {
+    killProcessTree(child.pid);
   }
+
+  try {
+    if (fs.existsSync(pidFile) && Number(fs.readFileSync(pidFile, 'utf8').trim()) === process.pid) {
+      fs.unlinkSync(pidFile);
+    }
+  } catch {}
 
   if (tty) {
     process.stdout.write(ansi.show + ansi.altOff);
