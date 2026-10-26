@@ -19,6 +19,7 @@ export interface RdcEvent {
     ssh?: RdcSshInfo;
     sessionId?: string;
     pid?: number;
+    origin?: 'ui' | 'llm';
     args?: unknown;
     result?: {
         isError?: boolean;

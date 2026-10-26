@@ -85,6 +85,7 @@ export function startToolEvent(tool: string, args: unknown): { id: string; start
         tool,
         status: 'started',
         ...details,
+        origin: args && typeof args === 'object' ? (args as any).origin : undefined,
         args: redact(args),
     });
 
@@ -123,6 +124,7 @@ export function finishToolEvent(
         status: isError ? 'error' : 'success',
         durationMs: Date.now() - context.startedAt,
         ...details,
+        origin: args && typeof args === 'object' ? args.origin : undefined,
         result: {
             isError,
             textPreview: resultPreview(result),

@@ -109,7 +109,7 @@ function render() {
   out += '╰' + line + '╯\n\n';
   out += c(ansi.bold, ' Activity') + '\n\n';
 
-  const list = pairedEvents().slice(-12);
+  const list = pairedEvents().filter(e => debug || e.origin !== 'ui').slice(-12);
   const renderKey = JSON.stringify([
     tunnelState,
     list.map(e => [e.id, e.status, e.durationMs, e.target, e.sessionId]),
