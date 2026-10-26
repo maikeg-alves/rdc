@@ -1210,7 +1210,7 @@ async function handleCallToolRequest(request: CallToolRequest): Promise<ServerRe
     // Hoisted above the try so the finally block can read them when emitting the
     // server_call_tool completion event (duration + status), even on the crash path.
     let telemetryData: any = { tool_name: name };
-    let result: ServerResult;
+    let result!: ServerResult;
     let isError = false;
 
     try {
