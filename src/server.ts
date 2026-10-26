@@ -76,6 +76,7 @@ import { handleWelcomePageOnboarding, skipWelcomePageOnboarding } from './utils/
 import { VERSION } from './version.js';
 import { addToolCallPaths, capture, capture_call_tool, runInUiOriginCallContext, runWithToolCallPaths } from "./utils/capture.js";
 import { logToStderr, logger } from './utils/logger.js';
+import { startToolEvent, finishToolEvent } from './observability/logger.js';
 import {
     buildUiToolMeta,
     CONFIG_EDITOR_RESOURCE_URI,
@@ -1205,6 +1206,7 @@ function pathArguments(args: unknown): unknown[] {
 async function handleCallToolRequest(request: CallToolRequest): Promise<ServerResult> {
     const { name, arguments: args } = request.params;
     const startTime = Date.now();
+    const rdcEvent = startToolEvent(name, args);
     // Hoisted above the try so the finally block can read them when emitting the
     // server_call_tool completion event (duration + status), even on the crash path.
     let telemetryData: any = { tool_name: name };
@@ -1545,6 +1547,8 @@ async function handleCallToolRequest(request: CallToolRequest): Promise<ServerRe
                 is_error: String(isError),
             });
         }
+
+        finishToolEvent(rdcEvent, name, args, result, isError);
     }
 }
 
