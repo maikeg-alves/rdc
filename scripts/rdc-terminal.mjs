@@ -176,20 +176,29 @@ function render(force = false) {
   out += `│ ${c(ansi.dim, healthDetail)}\n`;
   out += '╰' + line + '╯\n\n';
 
-  out += c(ansi.bold, ' Atividade') + '\n\n';
+  out += c(ansi.bold, ' Agente') + '\n\n';
 
   if (!list.length) {
     out += c(ansi.dim, '  aguardando ações do ChatGPT...') + '\n';
   } else {
     for (const e of list) {
-      const [category, label] = eventLabel(e);
       const duration = typeof e.durationMs === 'number' ? ` · ${e.durationMs}ms` : '';
+      const toolName = e.tool || e.action || 'tool';
 
-      out += ` ${statusIcon(e)} ${c(ansi.gray, time(e.timestamp))}  ${c(ansi.cyan, category.padEnd(8))} ${clip(label, width - 31)}${c(ansi.dim, duration)}\n`;
+      out += ` ${statusIcon(e)} ${c(ansi.gray, time(e.timestamp))}  ${c(ansi.bold, 'AGENT')}  ${c(ansi.cyan, toolName)}${c(ansi.dim, duration)}\n`;
 
-      if (e.category === 'ssh' && e.ssh?.host) {
+      if (e.category === 'terminal') {
+        let command = e.target || '';
+        if (!debug && /-EncodedCommand\s+/i.test(command)) command = e.action || e.tool;
+        if (command) out += `    ${c(ansi.dim, 'comando')}  ${clip(command, width - 15)}\n`;
+      } else if (e.category === 'file') {
+        if (e.target) out += `    ${c(ansi.dim, 'arquivo')}  ${clip(e.target, width - 15)}\n`;
+      } else if (e.category === 'ssh' && e.ssh?.host) {
         const port = e.ssh.port ? `:${e.ssh.port}` : '';
-        out += `    └─ ${c(ansi.dim, `${e.ssh.user ? e.ssh.user + '@' : ''}${e.ssh.host}${port}`)}\n`;
+        out += `    ${c(ansi.dim, 'ssh')}      ${e.ssh.user ? e.ssh.user + '@' : ''}${e.ssh.host}${port}\n`;
+      } else {
+        const [, label] = eventLabel(e);
+        if (label && label !== toolName) out += `    ${c(ansi.dim, 'alvo')}     ${clip(label, width - 15)}\n`;
       }
 
       if (e.category === 'terminal' && e.status === 'success' && e.result?.textPreview) {
@@ -206,19 +215,23 @@ function render(force = false) {
           )
           .slice(0, 12);
 
+        if (outputLines.length) out += `    ${c(ansi.dim, 'saída')}\n`;
+
         for (let i = 0; i < outputLines.length; i++) {
           const branch = i === outputLines.length - 1 ? '└─' : '├─';
-          out += `    ${branch} ${clip(outputLines[i], width - 8)}\n`;
+          out += `      ${branch} ${clip(outputLines[i], width - 10)}\n`;
         }
 
         if (String(e.result.textPreview).split(/\r?\n/).length > outputLines.length + 3) {
-          out += `    └─ ${c(ansi.dim, '… saída truncada; use rdc logs para ver mais')}\n`;
+          out += `      └─ ${c(ansi.dim, '… saída truncada; use rdc logs para ver mais')}\n`;
         }
       }
 
       if (e.status === 'error' && e.result?.textPreview) {
-        out += `    └─ ${c(ansi.red, clip(e.result.textPreview, width - 8))}\n`;
+        out += `    ${c(ansi.red, 'erro')}    ${clip(e.result.textPreview, width - 15)}\n`;
       }
+
+      out += '\n';
     }
   }
 
