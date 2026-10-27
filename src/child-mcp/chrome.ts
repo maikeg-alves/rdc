@@ -281,6 +281,11 @@ export async function callChromeTool(
             arguments: forwardedArgs,
         });
     } catch (error) {
+        // Drop a stale Chrome MCP transport immediately. The next tool call will
+        // start a fresh child process and reconnect to the current DevToolsActivePort
+        // instead of keeping a broken client cached for the rest of the session.
+        await closeChromeClient();
+
         const message = error instanceof Error ? error.message : String(error);
         const autoConnectHint =
             'Abra chrome://inspect/#remote-debugging no Chrome que você já usa e habilite Remote Debugging.';
