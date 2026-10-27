@@ -7,6 +7,7 @@ const MESSAGES_FILE = path.join(CHAT_DIR, 'messages.jsonl');
 const ACKS_FILE = path.join(CHAT_DIR, 'acks.jsonl');
 const REPLIES_FILE = path.join(CHAT_DIR, 'replies.jsonl');
 const ACTIVE_SESSION_FILE = path.join(CHAT_DIR, 'active-session.json');
+const BRIDGE_LEASE_FILE = path.join(CHAT_DIR, 'bridge-lease.json');
 const CLAIMS_DIR = path.join(CHAT_DIR, 'claims');
 
 const CLAIM_TTL_MS = 30000;
@@ -60,6 +61,13 @@ async function readJsonl<T>(filePath: string): Promise<T[]> {
 async function appendJsonl(filePath: string, value: unknown) {
     await ensureChatDir();
     await fs.appendFile(filePath, JSON.stringify(value) + '\n', 'utf8');
+}
+
+async function touchBridgeLease() {
+    await ensureChatDir();
+    await fs.writeFile(BRIDGE_LEASE_FILE, JSON.stringify({
+        activeAt: new Date().toISOString(),
+    }) + '\n', 'utf8');
 }
 
 async function readActiveSession(): Promise<ActiveTerminalSession | null> {
@@ -182,6 +190,7 @@ async function findAndClaimNextTerminalMessage(): Promise<TerminalMessage | null
 }
 
 export async function getNextTerminalMessage() {
+    await touchBridgeLease();
     const waitMs = 12000;
     const deadline = Date.now() + waitMs;
 

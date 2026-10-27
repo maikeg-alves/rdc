@@ -117,6 +117,16 @@ function getUiResourceMeta(): Record<string, unknown> {
     return { ui: { csp: UI_RESOURCE_CSP } };
 }
 
+function getRdcChatBridgeResourceMeta(): Record<string, unknown> {
+    return {
+        ui: { csp: UI_RESOURCE_CSP },
+        'openai/ui': {
+            availableDisplayModes: ['inline', 'pip'],
+        },
+        'openai/widgetDescription': 'Persistent RDC terminal bridge. Keep this session active while terminal messages are forwarded into ChatGPT.',
+    };
+}
+
 const READABLE_UI_RESOURCES: Record<string, ReadableUiResource> = {
     [FILE_PREVIEW_RESOURCE_URI]: {
         mimeType: FILE_PREVIEW_RESOURCE.mimeType,
@@ -131,7 +141,7 @@ const READABLE_UI_RESOURCES: Record<string, ReadableUiResource> = {
     [RDC_CHAT_BRIDGE_RESOURCE_URI]: {
         mimeType: RDC_CHAT_BRIDGE_RESOURCE.mimeType,
         getText: getRdcChatBridgeResourceText,
-        getMeta: getUiResourceMeta
+        getMeta: getRdcChatBridgeResourceMeta
     }
 };
 

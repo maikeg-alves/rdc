@@ -8,6 +8,7 @@ type PendingMessage = {
 
 type OpenAIHost = {
   sendFollowUpMessage?: (args: { prompt: string; scrollToBottom?: boolean }) => Promise<unknown> | unknown;
+  requestDisplayMode?: (args: { mode: 'inline' | 'pip' | 'fullscreen' }) => Promise<unknown> | unknown;
 };
 
 const bridge = createToolBridge({ idPrefix: 'rdc-chat', requestTimeoutMs: 20000 });
@@ -104,6 +105,15 @@ async function forwardMessage(message: PendingMessage) {
 }
 
 async function runBridgeLoop() {
+  const openai = (globalThis as unknown as { openai?: OpenAIHost }).openai;
+  if (openai?.requestDisplayMode) {
+    try {
+      await openai.requestDisplayMode({ mode: 'pip' });
+    } catch {
+      // PiP is best-effort; keep the bridge working inline if the host declines.
+    }
+  }
+
   setStatus('ativo', 'Aguardando mensagens do terminal.');
 
   while (!stopped) {

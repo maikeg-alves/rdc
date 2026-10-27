@@ -24,6 +24,7 @@ const chatMessagesFile = path.join(chatDir, 'messages.jsonl');
 const chatAcksFile = path.join(chatDir, 'acks.jsonl');
 const chatRepliesFile = path.join(chatDir, 'replies.jsonl');
 const chatActiveSessionFile = path.join(chatDir, 'active-session.json');
+const chatBridgeLeaseFile = path.join(chatDir, 'bridge-lease.json');
 const pidFile = path.join(home, '.rdc', 'rdc.pid');
 const chromeDevToolsPortFile = path.join(home, 'AppData', 'Local', 'Google', 'Chrome', 'User Data', 'DevToolsActivePort');
 const healthUrl = process.env.RDC_HEALTH_URL || 'http://127.0.0.1:8080/readyz';
@@ -137,6 +138,7 @@ let assistantTyping = false;
 const chatMessageStates = new Map();
 const CHAT_PENDING_TIMEOUT_MS = 20000;
 const CHAT_RESPONSE_TIMEOUT_MS = 35000;
+const CHAT_BRIDGE_LEASE_TTL_MS = 18000;
 
 const sessionStartedAt = Date.now();
 
@@ -282,6 +284,9 @@ function drawChrome(force = false) {
     '│ ' + color(ansi.dim, 'CORE') + '  ' +
     color(ansi.dim, 'Tunnel') + ' ' + stateBadge(tunnelState) + '   ' +
     color(ansi.dim, 'MCP') + ' ' + stateBadge(mcpState, 'mcp') + '   ' +
+    color(ansi.dim, 'Chat') + ' ' + (isChatBridgeActive()
+      ? color(ansi.green, '● LISTENING')
+      : color(ansi.gray, '● IDLE')) + '   ' +
     color(ansi.dim, 'Chrome') + ' ' + chromeBadge + '   ' +
     color(ansi.dim, 'Guard') + ' ' + color(ansi.green, '● SAFE') + '   ' +
     color(ansi.dim, 'Mode') + ' ' + modeBadge
@@ -465,7 +470,29 @@ function setChatMessageStatus(messageId, status) {
   }
 }
 
+function isChatBridgeActive() {
+  try {
+    if (!fs.existsSync(chatBridgeLeaseFile)) return false;
+    const lease = JSON.parse(fs.readFileSync(chatBridgeLeaseFile, 'utf8'));
+    const activeAt = Date.parse(lease?.activeAt || '');
+    return Number.isFinite(activeAt) && Date.now() - activeAt <= CHAT_BRIDGE_LEASE_TTL_MS;
+  } catch {
+    return false;
+  }
+}
+
 function enqueueTerminalMessage(text) {
+  if (!isChatBridgeActive()) {
+    writeBody('');
+    writeBody(' ' + color(ansi.cyan, 'YOU'));
+    for (const line of wrapAssistantText(text)) {
+      writeBody(line ? '    ' + line : '');
+    }
+    writeBody('    ' + color(ansi.red, '● bridge do ChatGPT inativo'));
+    writeBody('');
+    return null;
+  }
+
   const message = {
     id: 'msg_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8),
     sessionId: chatSessionId,
