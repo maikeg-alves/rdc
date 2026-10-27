@@ -44,7 +44,7 @@ async function waitForTerminalReply(messageId: string, timeoutMs: number) {
   while (!stopped && Date.now() < deadline) {
     const result = await bridge.callTool('rdc_terminal_ack_message', { messageId });
     if (extractReplyStatus(result).replied) return true;
-    await sleep(750);
+    await sleep(2000);
   }
   return false;
 }
@@ -88,11 +88,11 @@ async function forwardMessage(message: PendingMessage) {
   await openai.sendFollowUpMessage({ prompt, scrollToBottom: false });
   setStatus('aguardando', 'Mensagem entregue ao ChatGPT; aguardando retorno ao terminal.');
 
-  let replied = await waitForTerminalReply(message.id, 15000);
+  let replied = await waitForTerminalReply(message.id, 45000);
   if (!replied) {
     setStatus('reparando', 'A resposta apareceu no chat, mas ainda não voltou ao terminal. Tentando reparar a entrega.');
     await requestDeliveryRepair(message);
-    replied = await waitForTerminalReply(message.id, 10000);
+    replied = await waitForTerminalReply(message.id, 15000);
   }
 
   setStatus(

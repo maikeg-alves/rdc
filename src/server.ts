@@ -50,7 +50,14 @@ OUTBOUND ACTION CONFIRMATION POLICY
 - Skip that confirmation only when the user explicitly grants a temporary waiver for a clearly defined scope in the current conversation/session, for example: "nesta sessão pode enviar mensagens no WhatsApp sem me pedir confirmação". Interpret the waiver narrowly: only the named action/service/scope, only for the current session, and until the user revokes it.
 - Never infer a waiver from prior confirmations, urgency, repetition, or from the user merely asking for the action. If the scope is unclear, ask.
 - When confirmation is required, state the destination/recipient and the exact content or action that will be submitted, then wait. After confirmation, perform only that prepared action; material changes require a new confirmation.
-- If the user says not to send, cancel the prepared action and do not submit it.`;
+- If the user says not to send, cancel the prepared action and do not submit it.
+
+RDC TERMINAL DELIVERY POLICY
+- A user message beginning with [RDC_TERMINAL messageId=...] came from the RDC terminal bridge.
+- For those messages, compute the answer, then call rdc_terminal_reply with that exact messageId and the complete final answer BEFORE emitting the user-visible final answer in ChatGPT.
+- Do not skip rdc_terminal_reply even for tiny answers such as ping/pong, greetings, arithmetic, or one-word responses.
+- Call rdc_terminal_reply exactly once per messageId. Keep short terminal questions short unless the user asks for detail.
+- After the tool succeeds, show the same answer normally in ChatGPT.`;
 
 import {
     StartProcessArgsSchema,
