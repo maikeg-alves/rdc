@@ -47,10 +47,14 @@ async function forwardMessage(message: PendingMessage) {
     'Esta mensagem veio do terminal RDC. Responda normalmente nesta conversa e, ao finalizar, ' +
     `chame a tool rdc_terminal_reply com messageId="${message.id}" e text contendo a resposta final completa para o terminal.`;
 
-  await openai.sendFollowUpMessage({ prompt });
+  // Confirm receipt as soon as the widget owns the message. This makes the
+  // terminal status change immediately and prevents the same message from being
+  // re-delivered while ChatGPT is still generating the response.
   await bridge.callTool('rdc_terminal_ack_message', { messageId: message.id });
-
   lastMessageId = message.id;
+  setStatus('recebido', 'Mensagem recebida pelo bridge; aguardando resposta do ChatGPT.');
+
+  await openai.sendFollowUpMessage({ prompt });
   setStatus('enviado', 'Mensagem encaminhada para esta conversa.');
 }
 

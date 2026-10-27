@@ -23,6 +23,7 @@ const chatDir = path.join(home, '.rdc', 'chat');
 const chatMessagesFile = path.join(chatDir, 'messages.jsonl');
 const chatAcksFile = path.join(chatDir, 'acks.jsonl');
 const chatRepliesFile = path.join(chatDir, 'replies.jsonl');
+const chatActiveSessionFile = path.join(chatDir, 'active-session.json');
 const pidFile = path.join(home, '.rdc', 'rdc.pid');
 const chromeDevToolsPortFile = path.join(home, 'AppData', 'Local', 'Google', 'Chrome', 'User Data', 'DevToolsActivePort');
 const healthUrl = process.env.RDC_HEALTH_URL || 'http://127.0.0.1:8080/readyz';
@@ -99,9 +100,15 @@ function stopPreviousInstance() {
   try { fs.unlinkSync(pidFile); } catch {}
 }
 
+const chatSessionId = 'session_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
+
 if (!demo) {
   stopPreviousInstance();
   fs.writeFileSync(pidFile, String(process.pid), 'utf8');
+  fs.writeFileSync(chatActiveSessionFile, JSON.stringify({
+    sessionId: chatSessionId,
+    startedAt: new Date().toISOString(),
+  }) + '\n', 'utf8');
 }
 
 let child = null;
@@ -127,8 +134,8 @@ let partialReplyLine = '';
 let assistantReplyQueue = [];
 let assistantTyping = false;
 const chatMessageStates = new Map();
-const CHAT_PENDING_TIMEOUT_MS = 15000;
-const CHAT_RESPONSE_TIMEOUT_MS = 60000;
+const CHAT_PENDING_TIMEOUT_MS = 30000;
+const CHAT_RESPONSE_TIMEOUT_MS = 90000;
 
 const sessionStartedAt = Date.now();
 
@@ -460,6 +467,7 @@ function setChatMessageStatus(messageId, status) {
 function enqueueTerminalMessage(text) {
   const message = {
     id: 'msg_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8),
+    sessionId: chatSessionId,
     createdAt: new Date().toISOString(),
     text: String(text).trim(),
   };
@@ -990,6 +998,13 @@ function cleanup(code = 0) {
   try {
     if (fs.existsSync(pidFile) && Number(fs.readFileSync(pidFile, 'utf8').trim()) === process.pid) {
       fs.unlinkSync(pidFile);
+    }
+  } catch {}
+
+  try {
+    if (fs.existsSync(chatActiveSessionFile)) {
+      const active = JSON.parse(fs.readFileSync(chatActiveSessionFile, 'utf8'));
+      if (active?.sessionId === chatSessionId) fs.unlinkSync(chatActiveSessionFile);
     }
   } catch {}
 
