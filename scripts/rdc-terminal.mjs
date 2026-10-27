@@ -41,6 +41,7 @@ const ansi = {
   dim: '\x1b[2m',
   green: '\x1b[32m',
   yellow: '\x1b[33m',
+  amber: '\x1b[38;2;255;193;7m',
   red: '\x1b[31m',
   cyan: '\x1b[36m',
   blue: '\x1b[34m',
@@ -444,7 +445,7 @@ function writeBody(text = '') {
 
 function chatStatusText(status) {
   if (status === 'pending') return color(ansi.gray, '● pendente');
-  if (status === 'waiting') return color(ansi.yellow, '● entregue ao ChatGPT · aguardando resposta');
+  if (status === 'waiting') return color(ansi.amber, '● entregue ao ChatGPT · aguardando resposta');
   if (status === 'received') return color(ansi.green, '● resposta recebida');
   if (status === 'error') return color(ansi.red, '● falha ou resposta não recebida');
   return color(ansi.gray, '●');
