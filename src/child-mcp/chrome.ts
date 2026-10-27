@@ -21,15 +21,46 @@ let transport: StdioClientTransport | undefined;
 let connecting: Promise<Client> | undefined;
 let cachedTools: any[] = [];
 
+function detectLocalChromeBrowserUrl(): string | undefined {
+    if (process.platform !== 'win32') return undefined;
+
+    const localAppData = process.env.LOCALAPPDATA?.trim();
+    if (!localAppData) return undefined;
+
+    const portFile = path.join(
+        localAppData,
+        'Google',
+        'Chrome',
+        'User Data',
+        'DevToolsActivePort'
+    );
+
+    try {
+        const [portLine] = fs.readFileSync(portFile, 'utf8').split(/\r?\n/);
+        const port = Number(portLine?.trim());
+        if (Number.isInteger(port) && port > 0 && port <= 65535) {
+            return `http://127.0.0.1:${port}`;
+        }
+    } catch {
+        // Fall back to autoConnect below.
+    }
+
+    return undefined;
+}
+
 function childArgs(): string[] {
-    const browserUrl = process.env.RDC_CHROME_BROWSER_URL?.trim();
+    const browserUrl =
+        process.env.RDC_CHROME_BROWSER_URL?.trim() ||
+        detectLocalChromeBrowserUrl();
+
     if (browserUrl) {
+        // Directly attach to Chrome's existing DevTools endpoint. This avoids
+        // autoConnect's browser-target discovery path, which can disturb the
+        // user's foreground tab on some Chrome builds.
         return [chromeEntry, '--browserUrl', browserUrl, '--experimentalPageIdRouting'];
     }
 
-    // Attach to the user's already-open Chrome and route page-scoped tools by
-    // explicit pageId. This lets the agent work on a background tab without
-    // stealing the user's active tab/focus.
+    // Fallback only when Chrome has not exposed a DevToolsActivePort endpoint.
     return [chromeEntry, '--autoConnect', '--experimentalPageIdRouting'];
 }
 
