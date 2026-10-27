@@ -89,6 +89,7 @@ import {
 } from './utils/unsupportedParams.js';
 import { getConfig, setConfigValue } from './tools/config.js';
 import { listWifiNetworks, getWifiStatus } from './tools/wifi.js';
+import { getChatBridgeStatus, getNextTerminalMessage, acknowledgeTerminalMessage, replyToTerminal } from './tools/terminal-chat.js';
 import { listChromeTools, callChromeTool, isChromeTool } from './child-mcp/chrome.js';
 import { getUsageStats } from './tools/usage.js';
 import { giveFeedbackToDesktopCommander } from './tools/feedback.js';
@@ -106,6 +107,7 @@ import {
     buildUiToolMeta,
     CONFIG_EDITOR_RESOURCE_URI,
     FILE_PREVIEW_RESOURCE_URI,
+    RDC_CHAT_BRIDGE_RESOURCE_URI,
 } from './ui/contracts.js';
 import { listUiResources, readUiResource } from './ui/resources.js';
 import { shouldShowMcpUiPreviews } from './utils/mcp-ui-ab-test.js';
@@ -1177,6 +1179,76 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
                 },
             },
             {
+                name: "rdc_chat_bridge",
+                description: "Open the RDC terminal bridge for this ChatGPT conversation. Keep this widget open while using terminal-to-chat forwarding.",
+                inputSchema: {
+                    type: "object",
+                    additionalProperties: false,
+                    properties: {}
+                },
+                _meta: buildUiToolMeta(RDC_CHAT_BRIDGE_RESOURCE_URI, true, showMcpUiPreviews),
+                annotations: {
+                    title: "RDC Chat Bridge",
+                    readOnlyHint: true,
+                    openWorldHint: false,
+                    destructiveHint: false,
+                },
+            },
+            {
+                name: "rdc_terminal_next_message",
+                description: "Read the oldest RDC terminal message that has not yet been acknowledged by the active chat bridge.",
+                inputSchema: {
+                    type: "object",
+                    additionalProperties: false,
+                    properties: {}
+                },
+                _meta: buildUiToolMeta(RDC_CHAT_BRIDGE_RESOURCE_URI, true, showMcpUiPreviews),
+                annotations: {
+                    title: "Read RDC Terminal Message",
+                    readOnlyHint: true,
+                    openWorldHint: false,
+                    destructiveHint: false,
+                },
+            },
+            {
+                name: "rdc_terminal_ack_message",
+                description: "Acknowledge that an RDC terminal message was successfully forwarded into this conversation.",
+                inputSchema: {
+                    type: "object",
+                    additionalProperties: false,
+                    required: ["messageId"],
+                    properties: {
+                        messageId: { type: "string" }
+                    }
+                },
+                _meta: buildUiToolMeta(RDC_CHAT_BRIDGE_RESOURCE_URI, true, showMcpUiPreviews),
+                annotations: {
+                    title: "Acknowledge RDC Terminal Message",
+                    readOnlyHint: false,
+                    openWorldHint: false,
+                    destructiveHint: false,
+                },
+            },
+            {
+                name: "rdc_terminal_reply",
+                description: "Send the final assistant response back to the RDC terminal. When responding to a user message prefixed with [RDC_TERMINAL messageId=...], call this tool once with that same messageId and the complete final response text.",
+                inputSchema: {
+                    type: "object",
+                    additionalProperties: false,
+                    required: ["messageId", "text"],
+                    properties: {
+                        messageId: { type: "string" },
+                        text: { type: "string" }
+                    }
+                },
+                annotations: {
+                    title: "Reply to RDC Terminal",
+                    readOnlyHint: false,
+                    openWorldHint: false,
+                    destructiveHint: false,
+                },
+            },
+            {
                 name: "chrome_devtools",
                 description: `
                         Stable proxy to the Chrome DevTools MCP running inside RDC.
@@ -1443,6 +1515,22 @@ async function handleCallToolRequest(request: CallToolRequest): Promise<ServerRe
                         isError: true,
                     };
                 }
+                break;
+
+            case "rdc_chat_bridge":
+                result = getChatBridgeStatus();
+                break;
+
+            case "rdc_terminal_next_message":
+                result = await getNextTerminalMessage();
+                break;
+
+            case "rdc_terminal_ack_message":
+                result = await acknowledgeTerminalMessage(args);
+                break;
+
+            case "rdc_terminal_reply":
+                result = await replyToTerminal(args);
                 break;
 
             case "give_feedback_to_desktop_commander":

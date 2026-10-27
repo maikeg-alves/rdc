@@ -28,6 +28,15 @@ const TARGETS = {
       'src/ui/styles/components/compact-row.css',
       'src/ui/styles/apps/config-editor.css'
     ]
+  },
+  'rdc-chat-bridge': {
+    entry: 'src/ui/rdc-chat-bridge/src/main.ts',
+    output: 'dist/ui/rdc-chat-bridge/rdc-chat-bridge-runtime.js',
+    staticDir: 'src/ui/rdc-chat-bridge',
+    styleLayers: [
+      'src/ui/styles/base.css',
+      'src/ui/styles/apps/rdc-chat-bridge.css'
+    ]
   }
 };
 

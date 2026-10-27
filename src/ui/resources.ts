@@ -8,6 +8,7 @@ import {
     buildUiContentSecurityPolicy,
     CONFIG_EDITOR_RESOURCE_URI,
     FILE_PREVIEW_RESOURCE_URI,
+    RDC_CHAT_BRIDGE_RESOURCE_URI,
     UI_FONT_ORIGINS,
     UI_RESOURCE_CSP
 } from './contracts.js';
@@ -28,6 +29,13 @@ export const CONFIG_EDITOR_RESOURCE = {
     mimeType: UI_RESOURCE_MIME_TYPE
 };
 
+export const RDC_CHAT_BRIDGE_RESOURCE = {
+    uri: RDC_CHAT_BRIDGE_RESOURCE_URI,
+    name: 'RDC Chat Bridge',
+    description: 'Bridges messages from the RDC terminal into the active ChatGPT conversation.',
+    mimeType: UI_RESOURCE_MIME_TYPE
+};
+
 interface ReadableUiResource {
     mimeType: string;
     getText: () => Promise<string>;
@@ -38,6 +46,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const DIST_FILE_PREVIEW_DIR = path.resolve(__dirname, 'file-preview');
 const DIST_CONFIG_EDITOR_DIR = path.resolve(__dirname, 'config-editor');
+const DIST_RDC_CHAT_BRIDGE_DIR = path.resolve(__dirname, 'rdc-chat-bridge');
 
 function replaceOrThrow(
     source: string,
@@ -100,6 +109,10 @@ export async function getConfigEditorResourceText(): Promise<string> {
     return readInlinedResourceHtml(DIST_CONFIG_EDITOR_DIR, 'config-editor-runtime.js');
 }
 
+export async function getRdcChatBridgeResourceText(): Promise<string> {
+    return readInlinedResourceHtml(DIST_RDC_CHAT_BRIDGE_DIR, 'rdc-chat-bridge-runtime.js');
+}
+
 function getUiResourceMeta(): Record<string, unknown> {
     return { ui: { csp: UI_RESOURCE_CSP } };
 }
@@ -114,11 +127,16 @@ const READABLE_UI_RESOURCES: Record<string, ReadableUiResource> = {
         mimeType: CONFIG_EDITOR_RESOURCE.mimeType,
         getText: getConfigEditorResourceText,
         getMeta: getUiResourceMeta
+    },
+    [RDC_CHAT_BRIDGE_RESOURCE_URI]: {
+        mimeType: RDC_CHAT_BRIDGE_RESOURCE.mimeType,
+        getText: getRdcChatBridgeResourceText,
+        getMeta: getUiResourceMeta
     }
 };
 
 export function listUiResources() {
-    return [FILE_PREVIEW_RESOURCE, CONFIG_EDITOR_RESOURCE];
+    return [FILE_PREVIEW_RESOURCE, CONFIG_EDITOR_RESOURCE, RDC_CHAT_BRIDGE_RESOURCE];
 }
 
 export async function readUiResource(uri: string) {

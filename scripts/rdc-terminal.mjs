@@ -19,6 +19,9 @@ const profileFile = process.env.RDC_PROFILE_FILE || path.join(
 const logDir = process.env.RDC_LOG_DIR || path.join(home, '.rdc', 'logs');
 const eventFile = path.join(logDir, 'events.jsonl');
 const rawFile = path.join(logDir, 'tunnel.log');
+const chatDir = path.join(home, '.rdc', 'chat');
+const chatMessagesFile = path.join(chatDir, 'messages.jsonl');
+const chatRepliesFile = path.join(chatDir, 'replies.jsonl');
 const pidFile = path.join(home, '.rdc', 'rdc.pid');
 const chromeDevToolsPortFile = path.join(home, 'AppData', 'Local', 'Google', 'Chrome', 'User Data', 'DevToolsActivePort');
 const healthUrl = process.env.RDC_HEALTH_URL || 'http://127.0.0.1:8080/readyz';
@@ -28,6 +31,7 @@ const demo = process.argv.includes('--demo');
 const check = process.argv.includes('--check');
 
 fs.mkdirSync(logDir, { recursive: true });
+fs.mkdirSync(chatDir, { recursive: true });
 
 const ansi = {
   reset: '\x1b[0m',
@@ -113,6 +117,10 @@ let lastTunnelLine = '';
 let shuttingDown = false;
 let headerKey = '';
 let chromeReady = false;
+let chatInputMode = false;
+let chatInput = '';
+let replyOffset = fs.existsSync(chatRepliesFile) ? fs.statSync(chatRepliesFile).size : 0;
+let partialReplyLine = '';
 
 const sessionStartedAt = Date.now();
 
@@ -296,13 +304,20 @@ function drawChrome(force = false) {
   );
 
   move(footerRow()); clearLine();
-  const historyState = followTail
-    ? color(ansi.green, 'LIVE')
-    : color(ansi.yellow, `HISTÓRICO · ${viewportTop + 1}/${Math.max(historyLines.length, 1)}`);
-  process.stdout.write(
-    '  ' + historyState +
-    color(ansi.dim, '   ↑↓/JK navegar   PgUp/PgDn página   Home topo   G/End live   D debug   Q sair')
-  );
+  if (chatInputMode) {
+    process.stdout.write(
+      '  ' + color(ansi.cyan, 'CHAT') + '  > ' + chatInput +
+      color(ansi.dim, '   Enter enviar   Esc cancelar')
+    );
+  } else {
+    const historyState = followTail
+      ? color(ansi.green, 'LIVE')
+      : color(ansi.yellow, `HISTÓRICO · ${viewportTop + 1}/${Math.max(historyLines.length, 1)}`);
+    process.stdout.write(
+      '  ' + historyState +
+      color(ansi.dim, '   I chat   ↑↓/JK navegar   PgUp/PgDn página   Home topo   G/End live   D debug   Q sair')
+    );
+  }
 
   process.stdout.write(`\x1b[${BODY_TOP};${currentBottom}r`);
   process.stdout.write('\x1b8');
@@ -409,6 +424,85 @@ function writeBody(text = '') {
   }
 
   renderViewport();
+}
+
+
+function enqueueTerminalMessage(text) {
+  const message = {
+    id: 'msg_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8),
+    createdAt: new Date().toISOString(),
+    text: String(text).trim(),
+  };
+  if (!message.text) return null;
+  fs.appendFileSync(chatMessagesFile, JSON.stringify(message) + '\n', 'utf8');
+  writeBody(' ' + color(ansi.cyan, 'YOU') + '  ' + message.text);
+  writeBody('    ' + color(ansi.dim, 'encaminhado para a conversa ChatGPT ativa'));
+  return message;
+}
+
+function pollTerminalReplies() {
+  if (!fs.existsSync(chatRepliesFile)) return;
+  const stat = fs.statSync(chatRepliesFile);
+  if (stat.size <= replyOffset) return;
+
+  const fd = fs.openSync(chatRepliesFile, 'r');
+  try {
+    const length = stat.size - replyOffset;
+    const buffer = Buffer.alloc(length);
+    fs.readSync(fd, buffer, 0, length, replyOffset);
+    replyOffset = stat.size;
+    const combined = partialReplyLine + buffer.toString('utf8');
+    const lines = combined.split(/\r?\n/);
+    partialReplyLine = lines.pop() || '';
+
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      try {
+        const reply = JSON.parse(line);
+        if (!reply?.text) continue;
+        writeBody('');
+        writeBody(' ' + color(ansi.green, 'ASSISTANT'));
+        printCode(String(reply.text), '    ');
+        writeBody('');
+      } catch {}
+    }
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+function handleChatInputKey(key) {
+  if (!chatInputMode) return false;
+
+  if (key === '\u001b') {
+    chatInputMode = false;
+    chatInput = '';
+    drawChrome(true);
+    return true;
+  }
+
+  if (key === '\r' || key === '\n') {
+    const text = chatInput.trim();
+    chatInputMode = false;
+    chatInput = '';
+    drawChrome(true);
+    if (text) enqueueTerminalMessage(text);
+    return true;
+  }
+
+  if (key === '\u007f' || key === '\b') {
+    chatInput = chatInput.slice(0, -1);
+    drawChrome(true);
+    return true;
+  }
+
+  if (!key.startsWith('\u001b') && key >= ' ' && key !== '\u007f') {
+    chatInput += key;
+    drawChrome(true);
+    return true;
+  }
+
+  return true;
 }
 
 function headline(icon, event, label, extra = '') {
@@ -812,7 +906,14 @@ if (demo) {
     process.stdin.resume();
     process.stdin.setEncoding('utf8');
     process.stdin.on('data', key => {
+      if (handleChatInputKey(key)) return;
       if (key === '\u0003' || key.toLowerCase() === 'q') cleanup(0);
+      if (key.toLowerCase() === 'i') {
+        chatInputMode = true;
+        chatInput = '';
+        drawChrome(true);
+        return;
+      }
       if (handleNavigationKey(key)) return;
       if (key.toLowerCase() === 'd') {
         debug = !debug;
@@ -832,12 +933,14 @@ if (demo) {
   checkHealth();
   const healthTimer = setInterval(checkHealth, 1000);
   const eventTimer = setInterval(pollEvents, 120);
+  const replyTimer = setInterval(pollTerminalReplies, 250);
 
   process.on('SIGINT', () => cleanup(0));
   process.on('SIGTERM', () => cleanup(0));
   process.on('exit', () => {
     clearInterval(healthTimer);
     clearInterval(eventTimer);
+    clearInterval(replyTimer);
     try { raw.end(); } catch {}
   });
 }

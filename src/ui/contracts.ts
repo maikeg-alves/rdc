@@ -3,6 +3,7 @@
  */
 export const FILE_PREVIEW_RESOURCE_URI = 'ui://desktop-commander/file-preview';
 export const CONFIG_EDITOR_RESOURCE_URI = 'ui://desktop-commander/config-editor';
+export const RDC_CHAT_BRIDGE_RESOURCE_URI = 'ui://desktop-commander/rdc-chat-bridge';
 
 /**
  * A UI resource's `_meta.ui.csp`: the MCP Apps spec's `McpUiResourceCsp`. ext-apps defines it, but re-exports it through
