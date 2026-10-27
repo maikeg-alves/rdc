@@ -115,6 +115,16 @@ let headerKey = '';
 let chromeReady = false;
 
 const sessionStartedAt = Date.now();
+
+const RDC_ART = [
+  '██████╗  ██████╗  ██████╗',
+  '██╔══██╗ ██╔══██╗██╔════╝',
+  '██████╔╝ ██║  ██║██║     ',
+  '██╔══██╗ ██║  ██║██║     ',
+  '██║  ██║ ██████╔╝╚██████╗',
+  '╚═╝  ╚═╝ ╚═════╝  ╚═════╝',
+];
+
 const machineName = os.hostname();
 const nodeVersion = process.version;
 const rdcVersion = (() => {
@@ -143,7 +153,7 @@ let sessionStats = {
   lastDuration: undefined,
 };
 
-const HEADER_ROWS = 7;
+const HEADER_ROWS = 13;
 const BODY_TOP = HEADER_ROWS + 1;
 
 function terminalRows() {
@@ -218,7 +228,7 @@ function drawChrome(force = false) {
 
   const cols = terminalCols();
   const inner = Math.max(20, cols - 2);
-  const topLabel = ` RDC v${rdcVersion} // NULL · AGENT RUNTIME `;
+  const topLabel = ` RDC v${rdcVersion} · AGENT RUNTIME `;
   const top = '╭' + topLabel + '─'.repeat(Math.max(0, inner - topLabel.length)) + '╮';
   const bottom = '╰' + '─'.repeat(inner) + '╯';
 
@@ -238,7 +248,12 @@ function drawChrome(force = false) {
 
   move(1); clearLine(); process.stdout.write(color(ansi.bold, top));
 
-  move(2); clearLine();
+  for (let i = 0; i < RDC_ART.length; i++) {
+    move(2 + i); clearLine();
+    process.stdout.write('│  ' + color(ansi.white, RDC_ART[i]));
+  }
+
+  move(8); clearLine();
   process.stdout.write(
     '│ ' + color(ansi.dim, 'CORE') + '  ' +
     color(ansi.dim, 'Tunnel') + ' ' + stateBadge(tunnelState) + '   ' +
@@ -248,7 +263,7 @@ function drawChrome(force = false) {
     color(ansi.dim, 'Mode') + ' ' + modeBadge
   );
 
-  move(3); clearLine();
+  move(9); clearLine();
   process.stdout.write(
     '│ ' + color(ansi.dim, 'NODE') + '  ' +
     fit(machineName, 18) + '   ' +
@@ -259,7 +274,7 @@ function drawChrome(force = false) {
     color(ansi.dim, 'up') + ' ' + uptime
   );
 
-  move(4); clearLine();
+  move(10); clearLine();
   process.stdout.write(
     '│ ' + color(ansi.dim, 'TASK') + '  ' + currentTool + '   ' +
     color(ansi.dim, 'calls') + ' ' + sessionStats.started + '   ' +
@@ -269,12 +284,12 @@ function drawChrome(force = false) {
     (sessionStats.lastDuration !== undefined ? ' · ' + duration(sessionStats.lastDuration) : '')
   );
 
-  move(5); clearLine();
+  move(11); clearLine();
   process.stdout.write('│ ' + color(ansi.dim, 'LINK') + '  ' + fit(healthDetail, Math.max(20, inner - 9)));
 
-  move(6); clearLine(); process.stdout.write(color(ansi.bold, bottom));
+  move(12); clearLine(); process.stdout.write(color(ansi.bold, bottom));
 
-  move(7); clearLine();
+  move(13); clearLine();
   process.stdout.write(
     color(ansi.gray, '   ACTIVITY') + '  ' +
     color(ansi.dim, 'comandos · arquivos · browser · ssh · resultados em tempo real')
