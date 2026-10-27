@@ -1177,6 +1177,47 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
                 },
             },
             {
+                name: "chrome_devtools",
+                description: `
+                        Stable proxy to the Chrome DevTools MCP running inside RDC.
+                        Use this tool for browser work in the user's already-open Chrome without relying on dynamically exposed chrome_* tools.
+                        
+                        Workflow:
+                        1. Call with tool="list_pages" and arguments={} to discover current tabs.
+                        2. For page-scoped actions, pass pageUrl in arguments. RDC resolves the current pageId immediately before each action.
+                        3. Reuse an existing authenticated tab whenever possible and do not steal focus from the user's foreground tab.
+                        
+                        Examples:
+                        - {"tool":"list_pages","arguments":{}}
+                        - {"tool":"take_snapshot","arguments":{"pageUrl":"https://web.whatsapp.com/"}}
+                        - {"tool":"click","arguments":{"pageUrl":"https://web.whatsapp.com/","uid":"..."}}
+                        
+                        Do not use select_page or new_page; RDC blocks those foreground-switching actions.
+                        `,
+                inputSchema: {
+                    type: "object",
+                    additionalProperties: false,
+                    required: ["tool"],
+                    properties: {
+                        tool: {
+                            type: "string",
+                            description: "Chrome DevTools MCP tool name without the chrome_ prefix, for example list_pages, take_snapshot, click, evaluate_script, fill."
+                        },
+                        arguments: {
+                            type: "object",
+                            description: "Arguments for the selected Chrome DevTools tool. For page-scoped tools include pageUrl.",
+                            additionalProperties: true
+                        }
+                    }
+                },
+                annotations: {
+                    title: "Chrome DevTools",
+                    readOnlyHint: false,
+                    openWorldHint: true,
+                    destructiveHint: false,
+                },
+            },
+            {
                 name: "give_feedback_to_desktop_commander",
                 description: `
                         Open feedback form in browser to provide feedback about Desktop Commander.
@@ -1311,7 +1352,29 @@ async function handleCallToolRequest(request: CallToolRequest): Promise<ServerRe
         trackToolCall(name, args);
 
         // Child MCP tools are proxied before the local dispatcher.
-        if (isChromeTool(name)) {
+        if (name === 'chrome_devtools') {
+            const proxyArgs = (args && typeof args === 'object')
+                ? args as Record<string, unknown>
+                : {};
+            const requestedTool = typeof proxyArgs.tool === 'string'
+                ? proxyArgs.tool.trim()
+                : '';
+            const childArgs = (proxyArgs.arguments && typeof proxyArgs.arguments === 'object')
+                ? proxyArgs.arguments as Record<string, unknown>
+                : {};
+
+            if (!requestedTool) {
+                result = {
+                    content: [{ type: 'text', text: 'Error: chrome_devtools requires a tool name.' }],
+                    isError: true,
+                };
+            } else {
+                const chromeName = requestedTool.startsWith('chrome_')
+                    ? requestedTool
+                    : `chrome_${requestedTool}`;
+                result = await callChromeTool(chromeName, childArgs);
+            }
+        } else if (isChromeTool(name)) {
             result = await callChromeTool(name, args as Record<string, unknown> | undefined);
         } else switch (name) {
             // Config tools
