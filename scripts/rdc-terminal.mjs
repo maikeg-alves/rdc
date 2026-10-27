@@ -114,7 +114,36 @@ let shuttingDown = false;
 let headerKey = '';
 let chromeReady = false;
 
-const HEADER_ROWS = 5;
+const sessionStartedAt = Date.now();
+const machineName = os.hostname();
+const nodeVersion = process.version;
+const rdcVersion = (() => {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version || 'dev';
+  } catch { return 'dev'; }
+})();
+const gitBranch = (() => {
+  try {
+    return spawnSync('git', ['branch', '--show-current'], { cwd: root, encoding: 'utf8', windowsHide: true }).stdout.trim() || 'detached';
+  } catch { return 'unknown'; }
+})();
+const gitCommit = (() => {
+  try {
+    return spawnSync('git', ['rev-parse', '--short', 'HEAD'], { cwd: root, encoding: 'utf8', windowsHide: true }).stdout.trim() || '-------';
+  } catch { return '-------'; }
+})();
+
+let sessionStats = {
+  started: 0,
+  success: 0,
+  error: 0,
+  currentTool: 'idle',
+  currentSince: 0,
+  lastTool: 'nenhuma',
+  lastDuration: undefined,
+};
+
+const HEADER_ROWS = 7;
 const BODY_TOP = HEADER_ROWS + 1;
 
 function terminalRows() {
@@ -157,44 +186,107 @@ function setupScreen() {
   move(bodyBottom(), 1);
 }
 
+function formatUptime(ms) {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  return h > 0
+    ? `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+    : `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+}
+
+function fit(text, width) {
+  const value = cleanAnsi(text);
+  if (value.length <= width) return value;
+  return value.slice(0, Math.max(0, width - 1)) + '…';
+}
+
 function drawChrome(force = false) {
   if (!tty) return;
 
-  const key = JSON.stringify([tunnelState, mcpState, chromeState, healthDetail, debug, terminalCols(), terminalRows()]);
+  const uptime = formatUptime(Date.now() - sessionStartedAt);
+  const activeFor = sessionStats.currentSince
+    ? duration(Date.now() - sessionStats.currentSince)
+    : '';
+  const key = JSON.stringify([
+    tunnelState, mcpState, chromeState, healthDetail, debug,
+    terminalCols(), terminalRows(), uptime, sessionStats
+  ]);
   if (!force && key === headerKey) return;
   headerKey = key;
 
   const cols = terminalCols();
   const inner = Math.max(20, cols - 2);
-  const topLabel = ' RDC · AGENT CONSOLE ';
+  const topLabel = ` RDC v${rdcVersion} // NULL · AGENT RUNTIME `;
   const top = '╭' + topLabel + '─'.repeat(Math.max(0, inner - topLabel.length)) + '╮';
   const bottom = '╰' + '─'.repeat(inner) + '╯';
+
+  const chromeBadge = chromeState === 'ready'
+    ? color(ansi.green, '● READY')
+    : color(ansi.yellow, '● SETUP');
+  const modeBadge = color(debug ? ansi.yellow : ansi.cyan, debug ? 'DEBUG' : 'AGENT');
+  const ramUsedGb = ((os.totalmem() - os.freemem()) / 1024 / 1024 / 1024).toFixed(1);
+  const ramTotalGb = (os.totalmem() / 1024 / 1024 / 1024).toFixed(1);
+  const rdcMemMb = Math.round(process.memoryUsage().rss / 1024 / 1024);
+  const currentTool = sessionStats.currentTool === 'idle'
+    ? color(ansi.gray, 'idle')
+    : color(ansi.cyan, sessionStats.currentTool) + (activeFor ? color(ansi.dim, ' · ' + activeFor) : '');
 
   const currentBottom = bodyBottom();
   process.stdout.write('\x1b7');
 
   move(1); clearLine(); process.stdout.write(color(ansi.bold, top));
+
   move(2); clearLine();
-  const chromeBadge = chromeState === 'ready'
-    ? color(ansi.green, '● READY')
-    : color(ansi.yellow, '● SETUP');
-  process.stdout.write('│ ' + color(ansi.dim, 'Tunnel') + ' ' + stateBadge(tunnelState) +
-    '   ' + color(ansi.dim, 'MCP') + ' ' + stateBadge(mcpState, 'mcp') +
-    '   ' + color(ansi.dim, 'Chrome') + ' ' + chromeBadge +
-    '   ' + color(ansi.dim, 'Mode') + ' ' + color(debug ? ansi.yellow : ansi.cyan, debug ? 'DEBUG' : 'AGENT'));
+  process.stdout.write(
+    '│ ' + color(ansi.dim, 'CORE') + '  ' +
+    color(ansi.dim, 'Tunnel') + ' ' + stateBadge(tunnelState) + '   ' +
+    color(ansi.dim, 'MCP') + ' ' + stateBadge(mcpState, 'mcp') + '   ' +
+    color(ansi.dim, 'Chrome') + ' ' + chromeBadge + '   ' +
+    color(ansi.dim, 'Guard') + ' ' + color(ansi.green, '● SAFE') + '   ' +
+    color(ansi.dim, 'Mode') + ' ' + modeBadge
+  );
+
   move(3); clearLine();
-  process.stdout.write('│ ' + color(ansi.dim, healthDetail));
-  move(4); clearLine(); process.stdout.write(color(ansi.bold, bottom));
+  process.stdout.write(
+    '│ ' + color(ansi.dim, 'NODE') + '  ' +
+    fit(machineName, 18) + '   ' +
+    color(ansi.dim, 'git') + ' ' + fit(gitBranch, 20) + '@' + gitCommit + '   ' +
+    color(ansi.dim, 'pid') + ' ' + process.pid + '   ' +
+    color(ansi.dim, 'ram') + ' ' + ramUsedGb + '/' + ramTotalGb + 'G' + '   ' +
+    color(ansi.dim, 'rdc') + ' ' + rdcMemMb + 'M' + '   ' +
+    color(ansi.dim, 'up') + ' ' + uptime
+  );
+
+  move(4); clearLine();
+  process.stdout.write(
+    '│ ' + color(ansi.dim, 'TASK') + '  ' + currentTool + '   ' +
+    color(ansi.dim, 'calls') + ' ' + sessionStats.started + '   ' +
+    color(ansi.green, '✓ ' + sessionStats.success) + '   ' +
+    color(ansi.red, '✗ ' + sessionStats.error) + '   ' +
+    color(ansi.dim, 'last') + ' ' + fit(sessionStats.lastTool, 24) +
+    (sessionStats.lastDuration !== undefined ? ' · ' + duration(sessionStats.lastDuration) : '')
+  );
+
   move(5); clearLine();
-  process.stdout.write(color(ansi.gray, '   atividade do agente — comandos e resultados aparecem abaixo em tempo real'));
+  process.stdout.write('│ ' + color(ansi.dim, 'LINK') + '  ' + fit(healthDetail, Math.max(20, inner - 9)));
+
+  move(6); clearLine(); process.stdout.write(color(ansi.bold, bottom));
+
+  move(7); clearLine();
+  process.stdout.write(
+    color(ansi.gray, '   ACTIVITY') + '  ' +
+    color(ansi.dim, 'comandos · arquivos · browser · ssh · resultados em tempo real')
+  );
 
   move(footerRow()); clearLine();
   const historyState = followTail
     ? color(ansi.green, 'LIVE')
-    : color(ansi.yellow, `HISTÓRICO · linha ${viewportTop + 1}/${Math.max(historyLines.length, 1)}`);
+    : color(ansi.yellow, `HISTÓRICO · ${viewportTop + 1}/${Math.max(historyLines.length, 1)}`);
   process.stdout.write(
     '  ' + historyState +
-    color(ansi.dim, '   ↑↓/JK navegar   PgUp/PgDn página   G/End live   D debug   Q sair')
+    color(ansi.dim, '   ↑↓/JK navegar   PgUp/PgDn página   Home topo   G/End live   D debug   Q sair')
   );
 
   process.stdout.write(`\x1b[${BODY_TOP};${currentBottom}r`);
@@ -525,8 +617,23 @@ function readNewEvents() {
 
 function pollEvents() {
   for (const event of readNewEvents()) {
-    if (event.status === 'started') printStart(event);
-    else printFinish(event);
+    if (event.status === 'started') {
+      sessionStats.started += 1;
+      sessionStats.currentTool = event.tool;
+      sessionStats.currentSince = Date.now();
+      printStart(event);
+    } else {
+      if (event.status === 'success') sessionStats.success += 1;
+      if (event.status === 'error') sessionStats.error += 1;
+      sessionStats.lastTool = event.tool;
+      sessionStats.lastDuration = event.durationMs;
+      if (sessionStats.currentTool === event.tool) {
+        sessionStats.currentTool = 'idle';
+        sessionStats.currentSince = 0;
+      }
+      printFinish(event);
+    }
+    drawChrome(true);
   }
 }
 
