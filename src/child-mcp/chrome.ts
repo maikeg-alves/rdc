@@ -21,7 +21,7 @@ let transport: StdioClientTransport | undefined;
 let connecting: Promise<Client> | undefined;
 let cachedTools: any[] = [];
 
-function detectLocalChromeBrowserUrl(): string | undefined {
+function detectLocalChromeWsEndpoint(): string | undefined {
     if (process.platform !== 'win32') return undefined;
 
     const localAppData = process.env.LOCALAPPDATA?.trim();
@@ -36,31 +36,40 @@ function detectLocalChromeBrowserUrl(): string | undefined {
     );
 
     try {
-        const [portLine] = fs.readFileSync(portFile, 'utf8').split(/\r?\n/);
-        const port = Number(portLine?.trim());
-        if (Number.isInteger(port) && port > 0 && port <= 65535) {
-            return `http://127.0.0.1:${port}`;
+        const [rawPort, rawPath] = fs.readFileSync(portFile, 'utf8')
+            .split(/\r?\n/)
+            .map(line => line.trim())
+            .filter(Boolean);
+
+        const port = Number(rawPort);
+        if (
+            Number.isInteger(port) &&
+            port > 0 &&
+            port <= 65535 &&
+            rawPath?.startsWith('/devtools/browser/')
+        ) {
+            return `ws://127.0.0.1:${port}${rawPath}`;
         }
     } catch {
-        // Fall back to autoConnect below.
+        // Fall through to autoConnect.
     }
 
     return undefined;
 }
 
 function childArgs(): string[] {
-    const browserUrl =
-        process.env.RDC_CHROME_BROWSER_URL?.trim() ||
-        detectLocalChromeBrowserUrl();
-
+    const browserUrl = process.env.RDC_CHROME_BROWSER_URL?.trim();
     if (browserUrl) {
-        // Directly attach to Chrome's existing DevTools endpoint. This avoids
-        // autoConnect's browser-target discovery path, which can disturb the
-        // user's foreground tab on some Chrome builds.
         return [chromeEntry, '--browserUrl', browserUrl, '--experimentalPageIdRouting'];
     }
 
-    // Fallback only when Chrome has not exposed a DevToolsActivePort endpoint.
+    const wsEndpoint = detectLocalChromeWsEndpoint();
+    if (wsEndpoint) {
+        // Connect directly to the already-running Chrome browser target.
+        // This avoids /json/version probing and avoids autoConnect discovery.
+        return [chromeEntry, '--wsEndpoint', wsEndpoint, '--experimentalPageIdRouting'];
+    }
+
     return [chromeEntry, '--autoConnect', '--experimentalPageIdRouting'];
 }
 
