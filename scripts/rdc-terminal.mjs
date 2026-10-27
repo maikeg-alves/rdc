@@ -102,10 +102,29 @@ function stopPreviousInstance() {
   try { fs.unlinkSync(pidFile); } catch {}
 }
 
+function stopStaleTunnelInstances() {
+  if (process.platform !== 'win32') return;
+  const escapedProfile = profileFile.replace(/'/g, "''");
+  const script = [
+    `$profile = '${escapedProfile}'`,
+    `Get-CimInstance Win32_Process | Where-Object {`,
+    `  $_.Name -eq 'tunnel-client.exe' -and $_.CommandLine -like ('*' + $profile + '*')`,
+    `} | ForEach-Object {`,
+    `  Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue`,
+    `}`,
+  ].join('; ');
+
+  spawnSync('powershell.exe', ['-NoProfile', '-Command', script], {
+    windowsHide: true,
+    stdio: 'ignore',
+  });
+}
+
 const chatSessionId = 'session_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
 
 if (!demo) {
   stopPreviousInstance();
+  stopStaleTunnelInstances();
   fs.writeFileSync(pidFile, String(process.pid), 'utf8');
   fs.writeFileSync(chatActiveSessionFile, JSON.stringify({
     sessionId: chatSessionId,
@@ -993,7 +1012,13 @@ function checkHealth() {
     res.setEncoding('utf8');
     res.on('data', chunk => body += chunk);
     res.on('end', () => {
-      if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
+      // A stale/manual tunnel may still own the health port. Never mark this
+      // RDC instance online unless the child tunnel we spawned is still alive.
+      if (!child || child.exitCode !== null) {
+        tunnelState = 'offline';
+        mcpState = 'stopped';
+        healthDetail = 'health respondeu, mas o tunnel desta sessão não está ativo';
+      } else if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
         tunnelState = 'online';
         healthDetail = `readyz HTTP ${res.statusCode} · ${healthUrl}`;
       } else {
