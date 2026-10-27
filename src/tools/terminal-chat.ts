@@ -43,14 +43,28 @@ async function appendJsonl(filePath: string, value: unknown) {
     await fs.appendFile(filePath, JSON.stringify(value) + '\n', 'utf8');
 }
 
-export async function getNextTerminalMessage() {
+async function findNextTerminalMessage(): Promise<TerminalMessage | null> {
     const [messages, acks] = await Promise.all([
         readJsonl<TerminalMessage>(MESSAGES_FILE),
         readJsonl<TerminalAck>(ACKS_FILE),
     ]);
 
     const acknowledged = new Set(acks.map((ack) => ack.messageId));
-    const next = messages.find((message) => !acknowledged.has(message.id));
+    return messages.find((message) => !acknowledged.has(message.id)) ?? null;
+}
+
+export async function getNextTerminalMessage(args?: unknown) {
+    const requestedWaitMs = Number((args as any)?.waitMs ?? 0);
+    const waitMs = Number.isFinite(requestedWaitMs)
+        ? Math.max(0, Math.min(2500, requestedWaitMs))
+        : 0;
+    const deadline = Date.now() + waitMs;
+
+    let next = await findNextTerminalMessage();
+    while (!next && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 75));
+        next = await findNextTerminalMessage();
+    }
 
     return {
         content: [{
@@ -60,7 +74,8 @@ export async function getNextTerminalMessage() {
                 : 'No pending RDC terminal message.',
         }],
         structuredContent: {
-            message: next ?? null,
+            message: next,
+            waitedMs: waitMs,
         },
     };
 }

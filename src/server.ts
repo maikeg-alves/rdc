@@ -1196,11 +1196,18 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             },
             {
                 name: "rdc_terminal_next_message",
-                description: "Read the oldest RDC terminal message that has not yet been acknowledged by the active chat bridge.",
+                description: "Read the oldest RDC terminal message that has not yet been acknowledged by the active chat bridge. waitMs enables bounded long-polling so terminal messages are picked up with low latency without relying on browser timers.",
                 inputSchema: {
                     type: "object",
                     additionalProperties: false,
-                    properties: {}
+                    properties: {
+                        waitMs: {
+                            type: "number",
+                            minimum: 0,
+                            maximum: 2500,
+                            description: "Optional long-poll wait in milliseconds. Use up to 2500ms for the chat bridge."
+                        }
+                    }
                 },
                 _meta: buildUiToolMeta(RDC_CHAT_BRIDGE_RESOURCE_URI, true, showMcpUiPreviews),
                 annotations: {
@@ -1522,7 +1529,7 @@ async function handleCallToolRequest(request: CallToolRequest): Promise<ServerRe
                 break;
 
             case "rdc_terminal_next_message":
-                result = await getNextTerminalMessage();
+                result = await getNextTerminalMessage(args);
                 break;
 
             case "rdc_terminal_ack_message":

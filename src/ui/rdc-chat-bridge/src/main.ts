@@ -14,7 +14,7 @@ const bridge = createToolBridge({ idPrefix: 'rdc-chat' });
 const stateEl = document.getElementById('state');
 const detailEl = document.getElementById('detail');
 
-let busy = false;
+let stopped = false;
 let lastMessageId = '';
 
 function setStatus(state: string, detail: string) {
@@ -31,50 +31,56 @@ function extractPending(result: unknown): PendingMessage | null {
   return message as PendingMessage;
 }
 
-async function forwardPendingMessage() {
-  if (busy) return;
-  busy = true;
+async function forwardMessage(message: PendingMessage) {
+  if (message.id === lastMessageId) return;
 
-  try {
-    const result = await bridge.callTool('rdc_terminal_next_message', {});
-    const message = extractPending(result);
+  const openai = (globalThis as unknown as { openai?: OpenAIHost }).openai;
+  if (!openai?.sendFollowUpMessage) {
+    throw new Error('Este host não expõe sendFollowUpMessage.');
+  }
 
-    if (!message) {
-      setStatus('ativo', 'Aguardando mensagens do terminal.');
-      return;
+  setStatus('enviando', message.text);
+
+  const prompt =
+    `[RDC_TERMINAL messageId=${message.id}]\n` +
+    `${message.text}\n\n` +
+    'Esta mensagem veio do terminal RDC. Responda normalmente nesta conversa e, ao finalizar, ' +
+    `chame a tool rdc_terminal_reply com messageId="${message.id}" e text contendo a resposta final completa para o terminal.`;
+
+  await openai.sendFollowUpMessage({ prompt });
+  await bridge.callTool('rdc_terminal_ack_message', { messageId: message.id });
+
+  lastMessageId = message.id;
+  setStatus('enviado', 'Mensagem encaminhada para esta conversa.');
+}
+
+async function runBridgeLoop() {
+  setStatus('ativo', 'Aguardando mensagens do terminal.');
+
+  while (!stopped) {
+    try {
+      const result = await bridge.callTool('rdc_terminal_next_message', { waitMs: 2500 });
+      const message = extractPending(result);
+
+      if (!message) {
+        setStatus('ativo', 'Aguardando mensagens do terminal.');
+        continue;
+      }
+
+      await forwardMessage(message);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setStatus('erro', message);
+
+      // Short recovery delay only on failures. Normal operation has no timer gap:
+      // the next long-poll starts immediately after the previous one returns.
+      await new Promise((resolve) => setTimeout(resolve, 250));
     }
-
-    if (message.id === lastMessageId) {
-      return;
-    }
-
-    const openai = (globalThis as unknown as { openai?: OpenAIHost }).openai;
-    if (!openai?.sendFollowUpMessage) {
-      setStatus('sem suporte', 'Este host não expõe sendFollowUpMessage.');
-      return;
-    }
-
-    setStatus('enviando', message.text);
-
-    const prompt =
-      `[RDC_TERMINAL messageId=${message.id}]\n` +
-      `${message.text}\n\n` +
-      'Esta mensagem veio do terminal RDC. Responda normalmente nesta conversa e, ao finalizar, ' +
-      `chame a tool rdc_terminal_reply com messageId="${message.id}" e text contendo a resposta final completa para o terminal.`;
-
-    await openai.sendFollowUpMessage({ prompt });
-    await bridge.callTool('rdc_terminal_ack_message', { messageId: message.id });
-
-    lastMessageId = message.id;
-    setStatus('enviado', 'Mensagem encaminhada para esta conversa.');
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    setStatus('erro', message);
-  } finally {
-    busy = false;
   }
 }
 
-setStatus('ativo', 'Aguardando mensagens do terminal.');
-void forwardPendingMessage();
-setInterval(() => void forwardPendingMessage(), 1000);
+window.addEventListener('beforeunload', () => {
+  stopped = true;
+});
+
+void runBridgeLoop();
