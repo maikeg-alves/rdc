@@ -68,6 +68,7 @@ import {
 } from './utils/unsupportedParams.js';
 import { getConfig, setConfigValue } from './tools/config.js';
 import { listWifiNetworks, getWifiStatus } from './tools/wifi.js';
+import { listChromeTools, callChromeTool, isChromeTool } from './child-mcp/chrome.js';
 import { getUsageStats } from './tools/usage.js';
 import { giveFeedbackToDesktopCommander } from './tools/feedback.js';
 import { trackToolCall } from './utils/trackTools.js';
@@ -1179,13 +1180,14 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             },
         ];
 
-        // Filter tools based on current client
+        // Filter tools based on current client, then append optional child-MCP tools.
         const filteredTools = allTools.filter(tool => shouldIncludeTool(tool.name));
+        const chromeTools = await listChromeTools();
 
-        // logToStderr('debug', `Returning ${filteredTools.length} tools (filtered from ${allTools.length} total) for client: ${currentClient?.name || 'unknown'}`);
+        // logToStderr('debug', `Returning ${filteredTools.length + chromeTools.length} tools for client: ${currentClient?.name || 'unknown'}`);
 
         return {
-            tools: filteredTools,
+            tools: [...filteredTools, ...chromeTools],
         };
     } catch (error) {
         logToStderr('error', `Error in list_tools request handler: ${error}`);
@@ -1287,10 +1289,10 @@ async function handleCallToolRequest(request: CallToolRequest): Promise<ServerRe
         // Track tool call
         trackToolCall(name, args);
 
-        // Using a more structured approach with dedicated handlers
-        // (result is declared above so the finally block can read execution status)
-
-        switch (name) {
+        // Child MCP tools are proxied before the local dispatcher.
+        if (isChromeTool(name)) {
+            result = await callChromeTool(name, args as Record<string, unknown> | undefined);
+        } else switch (name) {
             // Config tools
             case "get_config":
                 try {

@@ -24,6 +24,10 @@ function classify(tool: string, args: any): EventDetails {
         return { category: 'wifi', action: tool };
     }
 
+    if (tool.startsWith('chrome_')) {
+        return { category: 'browser', action: tool };
+    }
+
     if (pid !== undefined) {
         const session = getSshSession(pid);
         if (session) {

@@ -13,7 +13,7 @@ export interface RdcEvent {
     tool: string;
     status: RdcEventStatus;
     durationMs?: number;
-    category: 'terminal' | 'ssh' | 'wifi' | 'file' | 'search' | 'config' | 'other';
+    category: 'terminal' | 'ssh' | 'wifi' | 'browser' | 'file' | 'search' | 'config' | 'other';
     action?: string;
     target?: string;
     ssh?: RdcSshInfo;

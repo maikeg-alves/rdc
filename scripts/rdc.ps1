@@ -25,6 +25,8 @@ function Show-RdcHelp {
     Write-Host "  rdc logs            Mostra eventos estruturados recentes"
     Write-Host "  rdc logs --raw      Mostra o log bruto do tunnel"
     Write-Host "  rdc sessions        Resume sessões SSH observadas"
+    Write-Host "  rdc chrome          Abre a página para habilitar Remote Debugging no Chrome atual"
+    Write-Host "  rdc chrome status   Verifica se o Chrome atual está pronto para o MCP"
     Write-Host "  rdc --debug         Inicia mostrando diagnóstico do tunnel"
     Write-Host "  rdc --help          Mostra esta ajuda"
     Write-Host ""
@@ -103,6 +105,37 @@ switch ($Action) {
                 $_
             }
         }
+        return
+    }
+    "chrome" {
+        $chromeExe = "C:\Program Files\Google\Chrome\Application\chrome.exe"
+        $devToolsPortFile = Join-Path $env:LOCALAPPDATA "Google\Chrome\User Data\DevToolsActivePort"
+
+        if ($Rest -contains "status") {
+            $chromeRunning = [bool](Get-Process chrome -ErrorAction SilentlyContinue)
+            $debugEnabled = Test-Path $devToolsPortFile
+            $version = $null
+            if (Test-Path $chromeExe) {
+                $version = (Get-Item $chromeExe).VersionInfo.ProductVersion
+            }
+
+            Write-Host ("Chrome: {0}" -f $(if ($chromeRunning) { "rodando" } else { "fechado" })) -ForegroundColor $(if ($chromeRunning) { "Green" } else { "Yellow" })
+            if ($version) { Write-Host "Versão: $version" }
+            Write-Host ("Remote Debugging: {0}" -f $(if ($debugEnabled) { "ATIVO" } else { "DESATIVADO" })) -ForegroundColor $(if ($debugEnabled) { "Green" } else { "Yellow" })
+            if (-not $debugEnabled) {
+                Write-Host "Execute 'rdc chrome' e habilite Remote Debugging na página aberta." -ForegroundColor Cyan
+            }
+            return
+        }
+
+        if (-not (Test-Path $chromeExe)) {
+            Write-Error "Google Chrome não encontrado em $chromeExe"
+            return
+        }
+
+        Start-Process $chromeExe "chrome://inspect/#remote-debugging"
+        Write-Host "Abri chrome://inspect/#remote-debugging no Chrome atual." -ForegroundColor Cyan
+        Write-Host "Habilite Remote Debugging uma vez; depois use: rdc chrome status" -ForegroundColor Yellow
         return
     }
     "sessions" {

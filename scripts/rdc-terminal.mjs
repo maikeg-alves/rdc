@@ -20,6 +20,7 @@ const logDir = process.env.RDC_LOG_DIR || path.join(home, '.rdc', 'logs');
 const eventFile = path.join(logDir, 'events.jsonl');
 const rawFile = path.join(logDir, 'tunnel.log');
 const pidFile = path.join(home, '.rdc', 'rdc.pid');
+const chromeDevToolsPortFile = path.join(home, 'AppData', 'Local', 'Google', 'Chrome', 'User Data', 'DevToolsActivePort');
 const healthUrl = process.env.RDC_HEALTH_URL || 'http://127.0.0.1:8080/readyz';
 
 let debug = process.argv.includes('--debug');
@@ -101,8 +102,12 @@ if (!demo) {
 let child = null;
 let eventOffset = fs.existsSync(eventFile) ? fs.statSync(eventFile).size : 0;
 let partialEventLine = '';
+let historyLines = [];
+let viewportTop = 0;
+let followTail = true;
 let tunnelState = demo ? 'online' : 'connecting';
 let mcpState = demo ? 'ready' : 'starting';
+let chromeState = demo ? 'ready' : (fs.existsSync(chromeDevToolsPortFile) ? 'ready' : 'setup');
 let healthDetail = demo ? 'readyz HTTP 200 · local' : 'iniciando tunnel-client...';
 let lastTunnelLine = '';
 let shuttingDown = false;
@@ -155,7 +160,7 @@ function setupScreen() {
 function drawChrome(force = false) {
   if (!tty) return;
 
-  const key = JSON.stringify([tunnelState, mcpState, healthDetail, debug, terminalCols(), terminalRows()]);
+  const key = JSON.stringify([tunnelState, mcpState, chromeState, healthDetail, debug, terminalCols(), terminalRows()]);
   if (!force && key === headerKey) return;
   headerKey = key;
 
@@ -170,8 +175,12 @@ function drawChrome(force = false) {
 
   move(1); clearLine(); process.stdout.write(color(ansi.bold, top));
   move(2); clearLine();
+  const chromeBadge = chromeState === 'ready'
+    ? color(ansi.green, '● READY')
+    : color(ansi.yellow, '● SETUP');
   process.stdout.write('│ ' + color(ansi.dim, 'Tunnel') + ' ' + stateBadge(tunnelState) +
     '   ' + color(ansi.dim, 'MCP') + ' ' + stateBadge(mcpState, 'mcp') +
+    '   ' + color(ansi.dim, 'Chrome') + ' ' + chromeBadge +
     '   ' + color(ansi.dim, 'Mode') + ' ' + color(debug ? ansi.yellow : ansi.cyan, debug ? 'DEBUG' : 'AGENT'));
   move(3); clearLine();
   process.stdout.write('│ ' + color(ansi.dim, healthDetail));
@@ -180,10 +189,105 @@ function drawChrome(force = false) {
   process.stdout.write(color(ansi.gray, '   atividade do agente — comandos e resultados aparecem abaixo em tempo real'));
 
   move(footerRow()); clearLine();
-  process.stdout.write(color(ansi.dim, '  [Q] sair   [D] debug   ·   rdc logs   ·   rdc sessions'));
+  const historyState = followTail
+    ? color(ansi.green, 'LIVE')
+    : color(ansi.yellow, `HISTÓRICO · linha ${viewportTop + 1}/${Math.max(historyLines.length, 1)}`);
+  process.stdout.write(
+    '  ' + historyState +
+    color(ansi.dim, '   ↑↓/JK navegar   PgUp/PgDn página   G/End live   D debug   Q sair')
+  );
 
   process.stdout.write(`\x1b[${BODY_TOP};${currentBottom}r`);
   process.stdout.write('\x1b8');
+}
+
+function bodyHeight() {
+  return Math.max(1, bodyBottom() - BODY_TOP + 1);
+}
+
+function maxViewportTop() {
+  return Math.max(0, historyLines.length - bodyHeight());
+}
+
+function renderViewport() {
+  if (!tty) return;
+
+  if (followTail) viewportTop = maxViewportTop();
+  viewportTop = Math.max(0, Math.min(viewportTop, maxViewportTop()));
+
+  process.stdout.write('\x1b7');
+  for (let row = BODY_TOP; row <= bodyBottom(); row++) {
+    move(row); clearLine();
+    const index = viewportTop + (row - BODY_TOP);
+    if (index < historyLines.length) {
+      process.stdout.write(historyLines[index]);
+    }
+  }
+  process.stdout.write('\x1b8');
+  drawChrome(true);
+}
+
+function pushHistoryLine(line = '') {
+  const raw = String(line);
+  const plain = cleanAnsi(raw);
+  const maxWidth = Math.max(20, terminalCols() - 1);
+
+  if (plain.length <= maxWidth) {
+    historyLines.push(raw);
+  } else {
+    for (let i = 0; i < plain.length; i += maxWidth) {
+      historyLines.push(plain.slice(i, i + maxWidth));
+    }
+  }
+
+  if (historyLines.length > 20000) {
+    const removed = historyLines.length - 20000;
+    historyLines = historyLines.slice(removed);
+    viewportTop = Math.max(0, viewportTop - removed);
+  }
+}
+
+function navigateHistory(delta) {
+  followTail = false;
+  viewportTop = Math.max(0, Math.min(viewportTop + delta, maxViewportTop()));
+  if (viewportTop >= maxViewportTop()) followTail = true;
+  renderViewport();
+}
+
+function goLive() {
+  followTail = true;
+  viewportTop = maxViewportTop();
+  renderViewport();
+}
+
+function handleNavigationKey(key) {
+  if (key === '\u001b[A' || key === 'k' || key === 'K') {
+    navigateHistory(-1);
+    return true;
+  }
+  if (key === '\u001b[B' || key === 'j' || key === 'J') {
+    navigateHistory(1);
+    return true;
+  }
+  if (key === '\u001b[5~') {
+    navigateHistory(-Math.max(1, bodyHeight() - 2));
+    return true;
+  }
+  if (key === '\u001b[6~') {
+    navigateHistory(Math.max(1, bodyHeight() - 2));
+    return true;
+  }
+  if (key === '\u001b[H' || key === '\u001b[1~') {
+    followTail = false;
+    viewportTop = 0;
+    renderViewport();
+    return true;
+  }
+  if (key === '\u001b[F' || key === '\u001b[4~' || key === 'g' || key === 'G') {
+    goLive();
+    return true;
+  }
+  return false;
 }
 
 function writeBody(text = '') {
@@ -193,9 +297,11 @@ function writeBody(text = '') {
     return;
   }
 
-  move(bodyBottom(), 1);
-  process.stdout.write(normalized);
-  if (!normalized.endsWith('\n')) process.stdout.write('\n');
+  for (const line of normalized.split('\n')) {
+    pushHistoryLine(line);
+  }
+
+  renderViewport();
 }
 
 function headline(icon, event, label, extra = '') {
@@ -290,6 +396,18 @@ function printStart(event) {
     return;
   }
 
+  if (event.category === 'browser') {
+    writeBody(headline(icon, event, event.tool));
+    const visibleArgs = Object.fromEntries(
+      Object.entries(args).filter(([key]) => key !== 'origin')
+    );
+    if (Object.keys(visibleArgs).length) {
+      writeBody('    ' + color(ansi.dim, 'chrome'));
+      printCode(JSON.stringify(visibleArgs, null, 2), '      ');
+    }
+    return;
+  }
+
   if (event.category === 'file') {
     writeBody(headline(icon, event, event.tool));
     const target = event.target || args.path || args.file_path || args.source || '';
@@ -342,6 +460,16 @@ function printFinish(event) {
     const output = commandOutput(text);
     if (output) {
       writeBody('    ' + color(ansi.dim, 'saída'));
+      printCode(output, '      ');
+    }
+    writeBody('');
+    return;
+  }
+
+  if (event.category === 'browser') {
+    const output = commandOutput(text);
+    if (output) {
+      writeBody('    ' + color(ansi.dim, 'resultado'));
       printCode(output, '      ');
     }
     writeBody('');
@@ -404,6 +532,10 @@ function pollEvents() {
 
 function checkHealth() {
   if (demo || shuttingDown) return;
+
+  chromeState = process.env.RDC_CHROME_BROWSER_URL || fs.existsSync(chromeDevToolsPortFile)
+    ? 'ready'
+    : 'setup';
 
   const req = http.get(healthUrl, { timeout: 800 }, res => {
     let body = '';
@@ -501,6 +633,7 @@ if (demo) {
     process.stdin.setEncoding('utf8');
     process.stdin.on('data', key => {
       if (key === '\u0003' || key.toLowerCase() === 'q') cleanup(0);
+      if (handleNavigationKey(key)) return;
     });
   }
 } else {
@@ -558,6 +691,7 @@ if (demo) {
     process.stdin.setEncoding('utf8');
     process.stdin.on('data', key => {
       if (key === '\u0003' || key.toLowerCase() === 'q') cleanup(0);
+      if (handleNavigationKey(key)) return;
       if (key.toLowerCase() === 'd') {
         debug = !debug;
         drawChrome(true);
@@ -569,7 +703,7 @@ if (demo) {
       process.stdout.write('\x1b[r');
       process.stdout.write(`\x1b[${BODY_TOP};${bodyBottom()}r`);
       drawChrome(true);
-      move(bodyBottom(), 1);
+      renderViewport();
     });
   }
 
