@@ -34,11 +34,13 @@ const SERVER_INSTRUCTIONS = `Desktop Commander provides tools for working with t
 BROWSER CONTINUITY POLICY
 - The Chrome integration is designed to work inside the user's already-open Chrome and preserve the user's foreground browsing session.
 - Before opening or navigating anything, call chrome_list_pages and look for an existing page whose URL/title/app matches the user's request.
-- Reuse that existing page by its pageId whenever possible. Prefer working in a background tab over creating, selecting, focusing, or replacing the user's active tab.
-- Do not launch chrome.exe, Start-Process Chrome, use AppActivate, SendKeys, SetForegroundWindow, or other OS-level browser automation. Use chrome_* tools with an explicit pageId.
+- Treat pageId values as ephemeral: they can change whenever Chrome tabs open/close. Never reuse a pageId from an earlier turn or earlier page listing.
+- For every page-scoped chrome_* action, pass the expected pageUrl of the intended existing tab. RDC will resolve the current pageId immediately before executing the action.
+- Prefer working in that background tab over creating, selecting, focusing, or replacing the user's active tab.
+- Do not launch chrome.exe, Start-Process Chrome, use AppActivate, SendKeys, SetForegroundWindow, or other OS-level browser automation. Use chrome_* tools with pageUrl so RDC can resolve the current background tab safely.
 - Do not navigate an unrelated existing tab merely because it is available. If no suitable page exists, explain that no matching page is open and ask before creating or repurposing a page unless the user's request explicitly asks to open a new page.
 - When several matching pages exist, prefer the one already authenticated and already showing the requested service. If ambiguity matters, ask the user which one to use.
-- Read/inspect first, then act. Keep the target pageId stable for the operation unless the page itself creates a child page that is necessary for the task.
+- Read/inspect first, then act. Keep the intended pageUrl stable for the operation; let RDC re-resolve its current pageId before every page-scoped action.
 
 OUTBOUND ACTION CONFIRMATION POLICY
 - Treat sending messages, emails, form submissions, comments, posts, purchases, payments, deletions, invitations, publishing, account changes, and any other externally consequential submit/send action as an outbound action.

@@ -114,7 +114,15 @@ export async function listChromeTools(): Promise<any[]> {
                 const pageScoped = !!schema?.properties?.pageId;
 
                 if (pageScoped) {
-                    schema.required = Array.from(new Set([...(schema.required || []), 'pageId']));
+                    schema.properties = {
+                        ...(schema.properties || {}),
+                        pageUrl: {
+                            type: 'string',
+                            description:
+                                'Expected URL of the target page. RDC resolves the current pageId from this URL before every action so stale page IDs cannot target another tab.',
+                        },
+                    };
+                    schema.required = Array.from(new Set([...(schema.required || []), 'pageUrl']));
                 }
 
                 return {
@@ -161,22 +169,76 @@ export async function callChromeTool(
     }
 
     const pageScoped = !!exposed?.inputSchema?.properties?.pageId;
-    if (pageScoped && (args?.pageId === undefined || args?.pageId === null)) {
-        return {
-            content: [{
-                type: 'text',
-                text: 'This Chrome tool requires pageId in RDC background mode. Call chrome_list_pages, choose the target tab, then retry with that pageId.',
-            }],
-            isError: true,
-        };
-    }
-
     const chrome = await connectChromeClient();
+
+    let forwardedArgs: Record<string, unknown> = { ...(args || {}) };
+
+    if (pageScoped) {
+        const expectedUrl = typeof forwardedArgs.pageUrl === 'string'
+            ? forwardedArgs.pageUrl.trim()
+            : '';
+
+        if (!expectedUrl) {
+            return {
+                content: [{
+                    type: 'text',
+                    text: 'This Chrome tool requires pageUrl in RDC background mode. Call chrome_list_pages, identify the existing target tab, then retry with its URL.',
+                }],
+                isError: true,
+            };
+        }
+
+        const pagesResult: any = await chrome.callTool({
+            name: 'list_pages',
+            arguments: {},
+        });
+        const pagesText = pagesResult?.content?.find((item: any) => item?.type === 'text')?.text || '';
+        const pageLines = String(pagesText).split(/\r?\n/);
+        const pages = pageLines
+            .map((line: string) => line.match(/^(\d+):\s+(\S+)(?:\s+\[selected\])?$/))
+            .filter((match): match is RegExpMatchArray => match !== null)
+            .map((match) => ({
+                pageId: Number(match[1]),
+                url: match[2],
+            }));
+
+        const exact = pages.find((page: any) => page.url === expectedUrl);
+        const byOrigin = (() => {
+            try {
+                const target = new URL(expectedUrl);
+                return pages.find((page: any) => {
+                    try {
+                        const candidate = new URL(page.url);
+                        return candidate.origin === target.origin;
+                    } catch {
+                        return false;
+                    }
+                });
+            } catch {
+                return undefined;
+            }
+        })();
+
+        const resolved = exact || byOrigin;
+
+        if (!resolved) {
+            return {
+                content: [{
+                    type: 'text',
+                    text: `RDC could not find an already-open Chrome tab matching ${expectedUrl}. The action was not executed.`,
+                }],
+                isError: true,
+            };
+        }
+
+        forwardedArgs.pageId = resolved.pageId;
+        delete forwardedArgs.pageUrl;
+    }
 
     try {
         return await chrome.callTool({
             name: childName,
-            arguments: args || {},
+            arguments: forwardedArgs,
         });
     } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
