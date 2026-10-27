@@ -24,12 +24,13 @@ let cachedTools: any[] = [];
 function childArgs(): string[] {
     const browserUrl = process.env.RDC_CHROME_BROWSER_URL?.trim();
     if (browserUrl) {
-        return [chromeEntry, '--browserUrl', browserUrl];
+        return [chromeEntry, '--browserUrl', browserUrl, '--experimentalPageIdRouting'];
     }
 
-    // Chrome DevTools MCP 0.23+ can attach to an already-open Chrome 144+
-    // once remote debugging is enabled at chrome://inspect/#remote-debugging.
-    return [chromeEntry, '--autoConnect'];
+    // Attach to the user's already-open Chrome and route page-scoped tools by
+    // explicit pageId. This lets the agent work on a background tab without
+    // stealing the user's active tab/focus.
+    return [chromeEntry, '--autoConnect', '--experimentalPageIdRouting'];
 }
 
 async function connectChromeClient(): Promise<Client> {
@@ -102,13 +103,33 @@ export async function listChromeTools(): Promise<any[]> {
         const chrome = await connectChromeClient();
         const response = await chrome.listTools();
 
-        cachedTools = response.tools.map((tool: any) => ({
-            ...tool,
-            name: chromeToolName(tool.name),
-            title: tool.title ? `Chrome: ${tool.title}` : undefined,
-            description:
-                `Chrome DevTools (existing Chrome session): ${tool.description || tool.name}`,
-        }));
+        // Do not expose tools whose purpose is to change the user's foreground
+        // browsing context. RDC operates existing tabs by pageId instead.
+        const hiddenTools = new Set(['select_page', 'new_page']);
+
+        cachedTools = response.tools
+            .filter((tool: any) => !hiddenTools.has(tool.name))
+            .map((tool: any) => {
+                const schema = structuredClone(tool.inputSchema || { type: 'object', properties: {} });
+                const pageScoped = !!schema?.properties?.pageId;
+
+                if (pageScoped) {
+                    schema.required = Array.from(new Set([...(schema.required || []), 'pageId']));
+                }
+
+                return {
+                    ...tool,
+                    inputSchema: schema,
+                    name: chromeToolName(tool.name),
+                    title: tool.title ? `Chrome: ${tool.title}` : undefined,
+                    description:
+                        `Chrome DevTools on the user's already-open Chrome. ` +
+                        (pageScoped
+                            ? 'BACKGROUND-SAFE: always target the explicit pageId returned by chrome_list_pages; do not switch/focus the user\'s active tab. '
+                            : '') +
+                        `${tool.description || tool.name}`,
+                };
+            });
 
         return cachedTools;
     } catch {
@@ -121,8 +142,36 @@ export async function callChromeTool(
     name: string,
     args: Record<string, unknown> | undefined
 ): Promise<any> {
-    const chrome = await connectChromeClient();
     const childName = childChromeToolName(name);
+
+    if (childName === 'select_page' || childName === 'new_page') {
+        return {
+            content: [{
+                type: 'text',
+                text: 'RDC blocks Chrome foreground-switching tools. Use chrome_list_pages and target an existing tab with pageId.',
+            }],
+            isError: true,
+        };
+    }
+
+    let exposed = cachedTools.find(tool => tool.name === name);
+    if (!exposed) {
+        await listChromeTools();
+        exposed = cachedTools.find(tool => tool.name === name);
+    }
+
+    const pageScoped = !!exposed?.inputSchema?.properties?.pageId;
+    if (pageScoped && (args?.pageId === undefined || args?.pageId === null)) {
+        return {
+            content: [{
+                type: 'text',
+                text: 'This Chrome tool requires pageId in RDC background mode. Call chrome_list_pages, choose the target tab, then retry with that pageId.',
+            }],
+            isError: true,
+        };
+    }
+
+    const chrome = await connectChromeClient();
 
     try {
         return await chrome.callTool({

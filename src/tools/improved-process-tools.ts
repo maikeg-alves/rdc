@@ -25,6 +25,24 @@ let virtualPidCounter = -1000; // Use negative PIDs for virtual sessions
 /** How long a node:local script's output pipes may stay open after its timeout ended its tree */
 const PIPES_CLOSE_WAIT_MS = 1000;
 
+function isFocusStealingBrowserAutomation(command: string): boolean {
+  const value = command.toLowerCase();
+
+  const focusStealingPatterns = [
+    /\bappactivate\s*\(/,
+    /\.appactivate\s*\(/,
+    /\bsendkeys\s*\(/,
+    /\.sendkeys\s*\(/,
+    /\bsetforegroundwindow\b/,
+    /\bshowwindowasync\b/,
+    /\bshowwindow\b/,
+    /start-process\s+(?:['"]?[^\s'"]*[\\/])?chrome(?:\.exe)?\b/,
+    /\bchrome(?:\.exe)?\s+['"]?https?:\/\//,
+  ];
+
+  return focusStealingPatterns.some(pattern => pattern.test(value));
+}
+
 /** The answer when some processes of a session could not be ended */
 function terminationFailedResult(pid: number): ServerResult {
   return {
@@ -164,6 +182,23 @@ export async function startProcess(args: unknown, maxWaitMs: number = MAX_PROCES
     capture('server_start_process', {
       command: commandManager.getBaseCommand(parsed.data.command)
     });
+  }
+
+  if (isFocusStealingBrowserAutomation(parsed.data.command)) {
+    return {
+      content: [{
+        type: "text",
+        text:
+          "Error: Foreground browser/UI automation is blocked by RDC because it can steal the user's keyboard, focus, or active tab. " +
+          "Use the chrome_* tools instead: call chrome_list_pages, then target the existing tab with its pageId.",
+      }],
+      isError: true,
+      structuredContent: {
+        blocked: true,
+        command: parsed.data.command,
+        reason: 'foreground_browser_automation',
+      },
+    };
   }
 
   const isAllowed = await commandManager.validateCommand(parsed.data.command);
