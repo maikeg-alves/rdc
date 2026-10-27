@@ -59,7 +59,7 @@ async function runBridgeLoop() {
 
   while (!stopped) {
     try {
-      const result = await bridge.callTool('rdc_terminal_next_message', { waitMs: 2500 });
+      const result = await bridge.callTool('rdc_terminal_next_message', {});
       const message = extractPending(result);
 
       if (!message) {

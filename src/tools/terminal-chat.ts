@@ -53,11 +53,8 @@ async function findNextTerminalMessage(): Promise<TerminalMessage | null> {
     return messages.find((message) => !acknowledged.has(message.id)) ?? null;
 }
 
-export async function getNextTerminalMessage(args?: unknown) {
-    const requestedWaitMs = Number((args as any)?.waitMs ?? 0);
-    const waitMs = Number.isFinite(requestedWaitMs)
-        ? Math.max(0, Math.min(2500, requestedWaitMs))
-        : 0;
+export async function getNextTerminalMessage() {
+    const waitMs = 2500;
     const deadline = Date.now() + waitMs;
 
     let next = await findNextTerminalMessage();
