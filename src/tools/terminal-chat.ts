@@ -54,7 +54,7 @@ async function findNextTerminalMessage(): Promise<TerminalMessage | null> {
 }
 
 export async function getNextTerminalMessage() {
-    const waitMs = 2500;
+    const waitMs = 12000;
     const deadline = Date.now() + waitMs;
 
     let next = await findNextTerminalMessage();

@@ -10,7 +10,7 @@ type OpenAIHost = {
   sendFollowUpMessage?: (args: { prompt: string }) => Promise<unknown> | unknown;
 };
 
-const bridge = createToolBridge({ idPrefix: 'rdc-chat' });
+const bridge = createToolBridge({ idPrefix: 'rdc-chat', requestTimeoutMs: 20000 });
 const stateEl = document.getElementById('state');
 const detailEl = document.getElementById('detail');
 

@@ -121,6 +121,8 @@ let chatInputMode = false;
 let chatInput = '';
 let replyOffset = fs.existsSync(chatRepliesFile) ? fs.statSync(chatRepliesFile).size : 0;
 let partialReplyLine = '';
+let assistantReplyQueue = [];
+let assistantTyping = false;
 
 const sessionStartedAt = Date.now();
 
@@ -435,9 +437,105 @@ function enqueueTerminalMessage(text) {
   };
   if (!message.text) return null;
   fs.appendFileSync(chatMessagesFile, JSON.stringify(message) + '\n', 'utf8');
-  writeBody(' ' + color(ansi.cyan, 'YOU') + '  ' + message.text);
-  writeBody('    ' + color(ansi.dim, 'encaminhado para a conversa ChatGPT ativa'));
+  writeBody('');
+  writeBody(' ' + color(ansi.cyan, 'YOU'));
+  for (const line of wrapAssistantText(message.text)) {
+    writeBody(line ? '    ' + line : '');
+  }
+  writeBody('');
   return message;
+}
+
+
+function wrapAssistantText(text) {
+  const width = Math.max(28, terminalCols() - 8);
+  const source = cleanAnsi(String(text ?? '')).replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim();
+  const out = [];
+
+  for (const rawLine of source.split('\n')) {
+    if (!rawLine.trim()) {
+      if (out.length && out[out.length - 1] !== '') out.push('');
+      continue;
+    }
+
+    const bullet = rawLine.match(/^(\s*(?:[-*+] |\d+[.)] ))(.*)$/);
+    const firstPrefix = bullet ? bullet[1] : '';
+    const hangingPrefix = bullet ? ' '.repeat(firstPrefix.length) : '';
+    const words = (bullet ? bullet[2] : rawLine.trim()).split(/\s+/);
+    let line = firstPrefix;
+
+    for (const word of words) {
+      const spacer = line.trim().length ? ' ' : '';
+      if ((line + spacer + word).length > width && line.trim().length) {
+        out.push(line);
+        line = hangingPrefix + word;
+      } else {
+        line += spacer + word;
+      }
+    }
+    out.push(line);
+  }
+
+  while (out.length && out[out.length - 1] === '') out.pop();
+  return out;
+}
+
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+async function animateAssistantReply(text) {
+  const lines = wrapAssistantText(text);
+  const totalChars = lines.reduce((sum, line) => sum + Array.from(line).length, 0);
+  const charsPerTick = Math.max(1, Math.ceil(totalChars / 420));
+
+  writeBody('');
+  writeBody(' ' + color(ansi.green, 'ASSISTANT'));
+
+  for (const line of lines) {
+    if (!line) {
+      pushHistoryLine('');
+      renderViewport();
+      await sleep(55);
+      continue;
+    }
+
+    const chars = Array.from(line);
+    const historyIndex = historyLines.length;
+    historyLines.push('    ');
+    followTail = true;
+
+    for (let index = 0; index < chars.length; index += charsPerTick) {
+      const visible = chars.slice(0, Math.min(chars.length, index + charsPerTick)).join('');
+      historyLines[historyIndex] = '    ' + visible + color(ansi.dim, '▌');
+      renderViewport();
+
+      const last = visible.at(-1);
+      await sleep(/[.!?;:,]/.test(last || '') ? 28 : 14);
+    }
+
+    historyLines[historyIndex] = '    ' + chars.join('');
+    renderViewport();
+    await sleep(20);
+  }
+
+  writeBody('');
+}
+
+async function drainAssistantReplies() {
+  if (assistantTyping) return;
+  assistantTyping = true;
+  try {
+    while (assistantReplyQueue.length) {
+      const reply = assistantReplyQueue.shift();
+      await animateAssistantReply(reply.text);
+    }
+  } finally {
+    assistantTyping = false;
+  }
+}
+
+function queueAssistantReply(reply) {
+  assistantReplyQueue.push(reply);
+  void drainAssistantReplies();
 }
 
 function pollTerminalReplies() {
@@ -460,10 +558,10 @@ function pollTerminalReplies() {
       try {
         const reply = JSON.parse(line);
         if (!reply?.text) continue;
-        writeBody('');
-        writeBody(' ' + color(ansi.green, 'ASSISTANT'));
-        printCode(String(reply.text), '    ');
-        writeBody('');
+        queueAssistantReply({
+          messageId: reply.messageId,
+          text: String(reply.text),
+        });
       } catch {}
     }
   } finally {
@@ -569,8 +667,15 @@ function printWifi(event) {
   writeBody('');
 }
 
+const CHAT_BRIDGE_TOOLS = new Set([
+  'rdc_chat_bridge',
+  'rdc_terminal_next_message',
+  'rdc_terminal_ack_message',
+  'rdc_terminal_reply',
+]);
+
 function printStart(event) {
-  if (!debug && event.origin === 'ui') return;
+  if (!debug && (event.origin === 'ui' || CHAT_BRIDGE_TOOLS.has(event.tool))) return;
 
   const args = event.args || {};
   const icon = color(ansi.yellow, '●');
@@ -636,7 +741,7 @@ function printStart(event) {
 }
 
 function printFinish(event) {
-  if (!debug && event.origin === 'ui') return;
+  if (!debug && (event.origin === 'ui' || CHAT_BRIDGE_TOOLS.has(event.tool))) return;
 
   if (event.category === 'wifi' && event.status === 'success') {
     printWifi(event);
@@ -726,6 +831,8 @@ function readNewEvents() {
 
 function pollEvents() {
   for (const event of readNewEvents()) {
+    if (!debug && CHAT_BRIDGE_TOOLS.has(event.tool)) continue;
+
     if (event.status === 'started') {
       sessionStats.started += 1;
       sessionStats.currentTool = event.tool;
