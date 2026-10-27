@@ -21,6 +21,7 @@ const eventFile = path.join(logDir, 'events.jsonl');
 const rawFile = path.join(logDir, 'tunnel.log');
 const chatDir = path.join(home, '.rdc', 'chat');
 const chatMessagesFile = path.join(chatDir, 'messages.jsonl');
+const chatAcksFile = path.join(chatDir, 'acks.jsonl');
 const chatRepliesFile = path.join(chatDir, 'replies.jsonl');
 const pidFile = path.join(home, '.rdc', 'rdc.pid');
 const chromeDevToolsPortFile = path.join(home, 'AppData', 'Local', 'Google', 'Chrome', 'User Data', 'DevToolsActivePort');
@@ -119,10 +120,15 @@ let headerKey = '';
 let chromeReady = false;
 let chatInputMode = false;
 let chatInput = '';
+let ackOffset = fs.existsSync(chatAcksFile) ? fs.statSync(chatAcksFile).size : 0;
+let partialAckLine = '';
 let replyOffset = fs.existsSync(chatRepliesFile) ? fs.statSync(chatRepliesFile).size : 0;
 let partialReplyLine = '';
 let assistantReplyQueue = [];
 let assistantTyping = false;
+const chatMessageStates = new Map();
+const CHAT_PENDING_TIMEOUT_MS = 15000;
+const CHAT_RESPONSE_TIMEOUT_MS = 60000;
 
 const sessionStartedAt = Date.now();
 
@@ -429,6 +435,28 @@ function writeBody(text = '') {
 }
 
 
+function chatStatusText(status) {
+  if (status === 'pending') return color(ansi.gray, '● pendente');
+  if (status === 'waiting') return color(ansi.yellow, '● entregue ao ChatGPT · aguardando resposta');
+  if (status === 'received') return color(ansi.green, '● resposta recebida');
+  if (status === 'error') return color(ansi.red, '● falha ou resposta não recebida');
+  return color(ansi.gray, '●');
+}
+
+function setChatMessageStatus(messageId, status) {
+  const state = chatMessageStates.get(messageId);
+  if (!state) return;
+
+  state.status = status;
+  if (status === 'waiting') state.acknowledgedAt = Date.now();
+  if (status === 'received') state.receivedAt = Date.now();
+
+  if (Number.isInteger(state.statusLineIndex) && state.statusLineIndex >= 0 && state.statusLineIndex < historyLines.length) {
+    historyLines[state.statusLineIndex] = '    ' + chatStatusText(status);
+    renderViewport();
+  }
+}
+
 function enqueueTerminalMessage(text) {
   const message = {
     id: 'msg_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8),
@@ -442,7 +470,21 @@ function enqueueTerminalMessage(text) {
   for (const line of wrapAssistantText(message.text)) {
     writeBody(line ? '    ' + line : '');
   }
+
+  const statusLineIndex = historyLines.length;
+  pushHistoryLine('    ' + chatStatusText('pending'));
+  renderViewport();
   writeBody('');
+
+  chatMessageStates.set(message.id, {
+    id: message.id,
+    status: 'pending',
+    createdAt: Date.now(),
+    acknowledgedAt: 0,
+    receivedAt: 0,
+    statusLineIndex,
+  });
+
   return message;
 }
 
@@ -538,6 +580,55 @@ function queueAssistantReply(reply) {
   void drainAssistantReplies();
 }
 
+
+function pollTerminalAcks() {
+  if (!fs.existsSync(chatAcksFile)) return;
+  const stat = fs.statSync(chatAcksFile);
+  if (stat.size <= ackOffset) return;
+
+  const fd = fs.openSync(chatAcksFile, 'r');
+  try {
+    const length = stat.size - ackOffset;
+    const buffer = Buffer.alloc(length);
+    fs.readSync(fd, buffer, 0, length, ackOffset);
+    ackOffset = stat.size;
+
+    const combined = partialAckLine + buffer.toString('utf8');
+    const lines = combined.split(/\r?\n/);
+    partialAckLine = lines.pop() || '';
+
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      try {
+        const ack = JSON.parse(line);
+        if (!ack?.messageId) continue;
+        setChatMessageStatus(String(ack.messageId), 'waiting');
+      } catch {}
+    }
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+function checkChatMessageTimeouts() {
+  const now = Date.now();
+
+  for (const state of chatMessageStates.values()) {
+    if (state.status === 'pending' && now - state.createdAt >= CHAT_PENDING_TIMEOUT_MS) {
+      setChatMessageStatus(state.id, 'error');
+      continue;
+    }
+
+    if (
+      state.status === 'waiting' &&
+      state.acknowledgedAt &&
+      now - state.acknowledgedAt >= CHAT_RESPONSE_TIMEOUT_MS
+    ) {
+      setChatMessageStatus(state.id, 'error');
+    }
+  }
+}
+
 function pollTerminalReplies() {
   if (!fs.existsSync(chatRepliesFile)) return;
   const stat = fs.statSync(chatRepliesFile);
@@ -558,6 +649,7 @@ function pollTerminalReplies() {
       try {
         const reply = JSON.parse(line);
         if (!reply?.text) continue;
+        if (reply.messageId) setChatMessageStatus(String(reply.messageId), 'received');
         queueAssistantReply({
           messageId: reply.messageId,
           text: String(reply.text),
@@ -1040,14 +1132,18 @@ if (demo) {
   checkHealth();
   const healthTimer = setInterval(checkHealth, 1000);
   const eventTimer = setInterval(pollEvents, 120);
-  const replyTimer = setInterval(pollTerminalReplies, 250);
+  const ackTimer = setInterval(pollTerminalAcks, 120);
+  const replyTimer = setInterval(pollTerminalReplies, 120);
+  const chatTimeoutTimer = setInterval(checkChatMessageTimeouts, 500);
 
   process.on('SIGINT', () => cleanup(0));
   process.on('SIGTERM', () => cleanup(0));
   process.on('exit', () => {
     clearInterval(healthTimer);
     clearInterval(eventTimer);
+    clearInterval(ackTimer);
     clearInterval(replyTimer);
+    clearInterval(chatTimeoutTimer);
     try { raw.end(); } catch {}
   });
 }
