@@ -145,13 +145,15 @@ async function findAndClaimNextTerminalMessage(): Promise<TerminalMessage | null
 
         const ack = ackByMessage.get(message.id);
         if (ack) {
-            const acknowledgedAt = Date.parse(ack.acknowledgedAt);
-            const age = Number.isFinite(acknowledgedAt) ? Date.now() - acknowledgedAt : 0;
-            if (age < IN_FLIGHT_TTL_MS) return null;
-            continue;
+            // Strict FIFO: once ChatGPT has received this message, later
+            // messages stay queued until its reply is written. Never auto-retry
+            // or skip an in-flight message, which avoids stale context.
+            return null;
         }
 
         if (await createClaim(message)) {
+            // Mark delivery at the exact moment the bridge fetches the message,
+            // so the terminal status turns yellow immediately.
             await appendJsonl(ACKS_FILE, {
                 messageId: message.id,
                 acknowledgedAt: new Date().toISOString(),

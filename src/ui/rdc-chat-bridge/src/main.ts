@@ -44,13 +44,12 @@ async function forwardMessage(message: PendingMessage) {
   const prompt =
     `[RDC_TERMINAL messageId=${message.id}]\n` +
     `${message.text}\n\n` +
-    'Esta mensagem veio do terminal RDC. Responda normalmente nesta conversa e, ao finalizar, ' +
-    `chame a tool rdc_terminal_reply com messageId="${message.id}" e text contendo a resposta final completa para o terminal.`;
+    'Esta mensagem veio do terminal RDC. Preserve a ordem da conversa. Gere a resposta e, antes de mostrar a resposta final nesta conversa, ' +
+    `chame imediatamente a tool rdc_terminal_reply com messageId="${message.id}" e text contendo a resposta final completa para o terminal. ` +
+    'Depois da tool, mostre a mesma resposta normalmente. Não use writing blocks para respostas vindas do RDC.';
 
-  // Confirm receipt as soon as the widget owns the message. This makes the
-  // terminal status change immediately and prevents the same message from being
-  // re-delivered while ChatGPT is still generating the response.
-  await bridge.callTool('rdc_terminal_ack_message', { messageId: message.id });
+  // getNextTerminalMessage already marks this message as received by the bridge.
+  // Keep one message in flight at a time so context cannot be reordered.
   lastMessageId = message.id;
   setStatus('recebido', 'Mensagem recebida pelo bridge; aguardando resposta do ChatGPT.');
 
