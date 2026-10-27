@@ -7,7 +7,7 @@ type PendingMessage = {
 };
 
 type OpenAIHost = {
-  sendFollowUpMessage?: (args: { prompt: string }) => Promise<unknown> | unknown;
+  sendFollowUpMessage?: (args: { prompt: string; scrollToBottom?: boolean }) => Promise<unknown> | unknown;
 };
 
 const bridge = createToolBridge({ idPrefix: 'rdc-chat', requestTimeoutMs: 20000 });
@@ -29,6 +29,38 @@ function extractPending(result: unknown): PendingMessage | null {
   if (!message || typeof message !== 'object') return null;
   if (typeof message.id !== 'string' || typeof message.text !== 'string') return null;
   return message as PendingMessage;
+}
+
+function extractReplyStatus(result: unknown) {
+  if (!result || typeof result !== 'object') return { replied: false };
+  const structured = (result as any).structuredContent;
+  return { replied: structured?.replied === true };
+}
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function waitForTerminalReply(messageId: string, timeoutMs: number) {
+  const deadline = Date.now() + timeoutMs;
+  while (!stopped && Date.now() < deadline) {
+    const result = await bridge.callTool('rdc_terminal_ack_message', { messageId });
+    if (extractReplyStatus(result).replied) return true;
+    await sleep(750);
+  }
+  return false;
+}
+
+async function requestDeliveryRepair(message: PendingMessage) {
+  const openai = (globalThis as unknown as { openai?: OpenAIHost }).openai;
+  if (!openai?.sendFollowUpMessage) return;
+
+  await openai.sendFollowUpMessage({
+    prompt:
+      `[RDC_DELIVERY_REPAIR messageId=${message.id}]\n` +
+      'A resposta anterior para esta mensagem já foi gerada no chat, mas não chegou ao terminal RDC. ' +
+      `Não responda novamente ao conteúdo. Apenas chame rdc_terminal_reply com messageId="${message.id}" ` +
+      'e use como text exatamente a resposta final que você acabou de dar para essa mensagem.',
+    scrollToBottom: false,
+  });
 }
 
 async function forwardMessage(message: PendingMessage) {
@@ -53,8 +85,22 @@ async function forwardMessage(message: PendingMessage) {
   lastMessageId = message.id;
   setStatus('recebido', 'Mensagem recebida pelo bridge; aguardando resposta do ChatGPT.');
 
-  await openai.sendFollowUpMessage({ prompt });
-  setStatus('enviado', 'Mensagem encaminhada para esta conversa.');
+  await openai.sendFollowUpMessage({ prompt, scrollToBottom: false });
+  setStatus('aguardando', 'Mensagem entregue ao ChatGPT; aguardando retorno ao terminal.');
+
+  let replied = await waitForTerminalReply(message.id, 15000);
+  if (!replied) {
+    setStatus('reparando', 'A resposta apareceu no chat, mas ainda não voltou ao terminal. Tentando reparar a entrega.');
+    await requestDeliveryRepair(message);
+    replied = await waitForTerminalReply(message.id, 10000);
+  }
+
+  setStatus(
+    replied ? 'concluído' : 'erro',
+    replied
+      ? 'Resposta entregue ao terminal RDC.'
+      : 'A resposta não voltou ao terminal dentro do prazo; a fila seguirá sem reenviar esta mensagem.'
+  );
 }
 
 async function runBridgeLoop() {

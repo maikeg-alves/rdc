@@ -10,7 +10,8 @@ const ACTIVE_SESSION_FILE = path.join(CHAT_DIR, 'active-session.json');
 const CLAIMS_DIR = path.join(CHAT_DIR, 'claims');
 
 const CLAIM_TTL_MS = 30000;
-const IN_FLIGHT_TTL_MS = 90000;
+const QUEUED_MESSAGE_TTL_MS = 20000;
+const IN_FLIGHT_TTL_MS = 35000;
 
 interface TerminalMessage {
     id: string;
@@ -145,10 +146,23 @@ async function findAndClaimNextTerminalMessage(): Promise<TerminalMessage | null
 
         const ack = ackByMessage.get(message.id);
         if (ack) {
-            // Strict FIFO: once ChatGPT has received this message, later
-            // messages stay queued until its reply is written. Never auto-retry
-            // or skip an in-flight message, which avoids stale context.
-            return null;
+            const acknowledgedAt = Date.parse(ack.acknowledgedAt);
+            const inFlightAge = Number.isFinite(acknowledgedAt)
+                ? Date.now() - acknowledgedAt
+                : 0;
+
+            // Preserve FIFO while the current turn is genuinely in flight.
+            // If ChatGPT never writes the reply, fail-open after the bounded
+            // timeout so one broken delivery cannot freeze the whole session.
+            if (inFlightAge < IN_FLIGHT_TTL_MS) return null;
+            continue;
+        }
+
+        const createdAt = Date.parse(message.createdAt);
+        if (Number.isFinite(createdAt) && Date.now() - createdAt > QUEUED_MESSAGE_TTL_MS) {
+            // Never resurrect old unsent terminal input later. A stale queued
+            // message is dropped instead of being injected out of context.
+            continue;
         }
 
         if (await createClaim(message)) {
@@ -203,18 +217,74 @@ export async function acknowledgeTerminalMessage(args: unknown) {
         };
     }
 
-    const existing = await readJsonl<TerminalAck>(ACKS_FILE);
-    if (!existing.some((ack) => ack.messageId === messageId)) {
-        await appendJsonl(ACKS_FILE, {
+    const [existingAcks, existingReplies] = await Promise.all([
+        readJsonl<TerminalAck>(ACKS_FILE),
+        readJsonl<TerminalReply>(REPLIES_FILE),
+    ]);
+    let ack = [...existingAcks].reverse().find((item) => item.messageId === messageId) ?? null;
+    if (!ack) {
+        ack = {
             messageId,
             acknowledgedAt: new Date().toISOString(),
-        });
+        };
+        await appendJsonl(ACKS_FILE, ack);
     }
     await releaseClaim(messageId);
 
+    const reply = [...existingReplies].reverse().find((item) => item.messageId === messageId) ?? null;
     return {
-        content: [{ type: 'text' as const, text: `Acknowledged RDC terminal message ${messageId}.` }],
-        structuredContent: { ok: true, messageId },
+        content: [{
+            type: 'text' as const,
+            text: reply
+                ? `RDC terminal message ${messageId} is acknowledged and has a reply.`
+                : `Acknowledged RDC terminal message ${messageId}.`,
+        }],
+        structuredContent: {
+            ok: true,
+            messageId,
+            delivered: true,
+            replied: Boolean(reply),
+            acknowledgedAt: ack.acknowledgedAt,
+            repliedAt: reply?.createdAt ?? null,
+        },
+    };
+}
+
+export async function getTerminalMessageStatus(args: unknown) {
+    const messageId = typeof (args as any)?.messageId === 'string'
+        ? (args as any).messageId.trim()
+        : '';
+
+    if (!messageId) {
+        return {
+            content: [{ type: 'text' as const, text: 'Error: messageId is required.' }],
+            isError: true,
+        };
+    }
+
+    const [acks, replies] = await Promise.all([
+        readJsonl<TerminalAck>(ACKS_FILE),
+        readJsonl<TerminalReply>(REPLIES_FILE),
+    ]);
+    const ack = [...acks].reverse().find((item) => item.messageId === messageId) ?? null;
+    const reply = [...replies].reverse().find((item) => item.messageId === messageId) ?? null;
+
+    return {
+        content: [{
+            type: 'text' as const,
+            text: reply
+                ? `RDC terminal message ${messageId} has a reply.`
+                : ack
+                    ? `RDC terminal message ${messageId} is delivered and waiting for a reply.`
+                    : `RDC terminal message ${messageId} has not been delivered yet.`,
+        }],
+        structuredContent: {
+            messageId,
+            delivered: Boolean(ack),
+            replied: Boolean(reply),
+            acknowledgedAt: ack?.acknowledgedAt ?? null,
+            repliedAt: reply?.createdAt ?? null,
+        },
     };
 }
 

@@ -1231,7 +1231,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             },
             {
                 name: "rdc_terminal_reply",
-                description: "Send the final assistant response back to the RDC terminal. When responding to a user message prefixed with [RDC_TERMINAL messageId=...], call this tool once with that same messageId and the complete final response text.",
+                description: "Send the final assistant response back to the RDC terminal. When responding to a user message prefixed with [RDC_TERMINAL messageId=...], call this tool once with that same messageId and the complete final response text before showing the final answer in chat.",
                 inputSchema: {
                     type: "object",
                     additionalProperties: false,

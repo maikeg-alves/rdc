@@ -134,8 +134,8 @@ let partialReplyLine = '';
 let assistantReplyQueue = [];
 let assistantTyping = false;
 const chatMessageStates = new Map();
-const CHAT_PENDING_TIMEOUT_MS = 30000;
-const CHAT_RESPONSE_TIMEOUT_MS = 90000;
+const CHAT_PENDING_TIMEOUT_MS = 20000;
+const CHAT_RESPONSE_TIMEOUT_MS = 35000;
 
 const sessionStartedAt = Date.now();
 
