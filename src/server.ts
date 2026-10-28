@@ -42,6 +42,14 @@ BROWSER CONTINUITY POLICY
 - When several matching pages exist, prefer the one already authenticated and already showing the requested service. If ambiguity matters, ask the user which one to use.
 - Read/inspect first, then act. Keep the intended pageUrl stable for the operation; let RDC re-resolve its current pageId before every page-scoped action.
 
+WHATSAPP MESSAGING ROUTING — AUTOMATIC
+- Whenever the user asks to send, write, reply to, or wait for a WhatsApp (WPP/Zap) message, automatically follow skills/whatsapp-messenger/SKILL.md. Do not require the user to mention or invoke the skill name.
+- This routing applies equally to requests received in ChatGPT or forwarded from the RDC terminal, including informal requests such as "manda no zap", "responde a fulano no wpp", "envia no grupo Notas", and follow-up approvals to a prepared WhatsApp send.
+- WhatsApp is handled through the already-open https://web.whatsapp.com/ tab via chrome_* or chrome_devtools. List pages, verify the exact chat header and composer, record the recent-message baseline, and use chrome_type_text with submitKey="Enter" after confirmation. Do not substitute chrome_fill: WhatsApp's contenteditable composer can report a successful fill while remaining empty.
+- Verify the newly sent message in the correct chat before reporting success. On uncertain state or MCP disconnection, inspect the history before retrying; never duplicate an outbound message.
+- If the user asks to await a response, check only that same conversation for a new incoming message; do not confuse your own message or read receipts with replies. Waiting beyond the active turn is not guaranteed without a separate scheduled monitor.
+- Use the global outbound-action confirmation policy below for the final send. This routing does not waive approval.
+
 OUTBOUND ACTION CONFIRMATION POLICY
 - Treat sending messages, emails, form submissions, comments, posts, purchases, payments, deletions, invitations, publishing, account changes, and any other externally consequential submit/send action as an outbound action.
 - You may prepare an outbound action without confirmation: locate the target, inspect context, draft text, fill non-submitting fields, and show the user exactly what is ready.
@@ -1260,6 +1268,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
                 description: `
                         Stable proxy to the Chrome DevTools MCP running inside RDC.
                         Use this tool for browser work in the user's already-open Chrome without relying on dynamically exposed chrome_* tools.
+                        For every WhatsApp/WPP/Zap send or reply request, automatically follow the WhatsApp Messenger workflow (skills/whatsapp-messenger/SKILL.md): verify destination in the existing WhatsApp Web tab; after explicit outbound approval, click the message editor and use tool=type_text with {text,submitKey:"Enter"}; never rely on fill for WhatsApp. Check the actual sent message before claiming success; inspect history before any retry. When asked, await a new incoming reply in the same chat.
                         
                         Workflow:
                         1. Call with tool="list_pages" and arguments={} to discover current tabs.
