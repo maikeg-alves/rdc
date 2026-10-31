@@ -187,6 +187,15 @@ const gitCommit = (() => {
     return spawnSync('git', ['rev-parse', '--short', 'HEAD'], { cwd: root, encoding: 'utf8', windowsHide: true }).stdout.trim() || '-------';
   } catch { return '-------'; }
 })();
+// Compara somente com a referência origin local (não promete atualização em tempo real).
+const versionState = (() => {
+  const upstream = `origin/${gitBranch}`;
+  const run = (...args) => spawnSync('git', args, { cwd: root, encoding: 'utf8', windowsHide: true });
+  if (run('rev-parse', '--verify', upstream).status !== 0) return 'SEM REFERÊNCIA';
+  if (run('rev-parse', 'HEAD').stdout.trim() === run('rev-parse', upstream).stdout.trim()) return 'ATUAL';
+  if (run('merge-base', '--is-ancestor', 'HEAD', upstream).status === 0) return 'ANTIGA';
+  return 'DIFERENTE';
+})();
 
 let sessionStats = {
   started: 0,
@@ -315,7 +324,8 @@ function drawChrome(force = false) {
   process.stdout.write(
     '│ ' + color(ansi.dim, 'NODE') + '  ' +
     fit(machineName, 18) + '   ' +
-    color(ansi.dim, 'git') + ' ' + fit(gitBranch, 20) + '@' + gitCommit + '   ' +
+    color(ansi.dim, 'git') + ' ' + fit(gitBranch, 20) + '@' + gitCommit + ' ' +
+    color(versionState === 'ANTIGA' ? ansi.yellow : versionState === 'ATUAL' ? ansi.green : ansi.gray, '[' + versionState + ']') + '   ' +
     color(ansi.dim, 'pid') + ' ' + process.pid + '   ' +
     color(ansi.dim, 'ram') + ' ' + ramUsedGb + '/' + ramTotalGb + 'G' + '   ' +
     color(ansi.dim, 'rdc') + ' ' + rdcMemMb + 'M' + '   ' +

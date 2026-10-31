@@ -2,6 +2,7 @@ import { createClient, SupabaseClient, Session, UserResponse, User, RealtimeChan
 import { captureRemote } from '../utils/capture.js';
 import { observeTransport } from './transport-telemetry.js';
 import { RealtimeHealthTelemetry } from './realtime-health-telemetry.js';
+import { writeConnectionStatus } from './connection-status.js';
 import { rolloutManager } from './rollouts.js';
 import { VERSION } from '../version.js';
 
@@ -1393,6 +1394,7 @@ export class RemoteChannel {
         // stale 'online' — and that row is what dispatch reads. Staying
         // silent lets the sweep do its job.
         if (!this.isReachable()) {
+            writeConnectionStatus('unstable', 'transport not joined');
             console.debug('[DEBUG] Skipping heartbeat write — no transport joined; letting the row age out');
             return;
         }
@@ -1477,6 +1479,7 @@ export class RemoteChannel {
             .abortSignal(this.deviceRowWriteSignal());
 
         if (error) {
+            writeConnectionStatus('unstable', 'device status write failed');
             console.error(`[DEBUG] Failed to set status ${status}:`, error.message);
             if (status == "online") {
                 console.error('Failed to update device status:', error.message);
@@ -1487,6 +1490,7 @@ export class RemoteChannel {
             console.debug(`[DEBUG] Device status set to ${status}`);
         }
 
+        writeConnectionStatus(status);
         return true;
 
         // console.log(status === 'online' ? `🔌 Device marked as ${status}` : `❌ Device marked as ${status}`);
