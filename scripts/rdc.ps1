@@ -82,6 +82,11 @@ switch ($Action) {
             $color = if ($check.Ok) { "Green" } else { "Red" }
             Write-Host "$mark $($check.Name)" -ForegroundColor $color
         }
+        $statusReader = Join-Path $RdcRoot 'scripts\rdc-connection-status.cjs'
+        if (Test-Path $statusReader) {
+            Write-Host 'Conectividade RDC (último registro):' -ForegroundColor Cyan
+            node $statusReader
+        }
         if ($checks.Ok -contains $false) { return }
         Write-Host "RDC pronto para iniciar." -ForegroundColor Cyan
         return
